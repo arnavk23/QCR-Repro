@@ -1,0 +1,7 @@
+method,config,end_len,runtime_sec,equivalent_1e5,notes
+local_lookup_strict,"depth=4,iters=1500,seed=10",228,2.4156,True,Python implementation method
+qiskit_opt0,"basis=rx,ry,rz,rxx",300,0.0182,N/A,Transpile baseline
+qiskit_opt1,"basis=rx,ry,rz,rxx",229,0.0165,N/A,Transpile baseline
+qiskit_opt2,"basis=rx,ry,rz,rxx",219,0.0111,N/A,Transpile baseline
+qiskit_opt3,"basis=rx,ry,rz,rxx",219,0.011,N/A,Transpile baseline
+bqskit_import_check,version=1.2.1,-1,-1,N/A,BQSKit installed; full pass parity script requires dedicated pass mapping for this gate set.
