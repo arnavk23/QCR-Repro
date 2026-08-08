@@ -7,6 +7,7 @@ from .config import GateInstance
 
 _SINGLE_RE = re.compile(r"^(rx|ry|rz)\(([-+0-9.eE]+)\)\s+q\[(\d+)\];$")
 _RXX_RE = re.compile(r"^rxx\(([-+0-9.eE]+)\)\s+q\[(\d+)\],\s*q\[(\d+)\];$")
+_CZ_RE = re.compile(r"^cz\s+q\[(\d+)\],\s*q\[(\d+)\];$")
 _QREG_RE = re.compile(r"^qreg\s+q\[(\d+)\];$")
 
 
@@ -33,6 +34,15 @@ def parse_qasm_subset(path: str | Path) -> tuple[int, list[GateInstance]]:
                 gates.append(GateInstance(name=name, qubits=(qubit,), theta=theta))
                 continue
 
+            cz_match = _CZ_RE.match(line)
+            if cz_match:
+                q0 = int(cz_match.group(1))
+                q1 = int(cz_match.group(2))
+                if q0 > q1:
+                    q0, q1 = q1, q0
+                gates.append(GateInstance(name="CZ", qubits=(q0, q1), theta=None))
+                continue
+
             rxx_match = _RXX_RE.match(line)
             if rxx_match:
                 theta = float(rxx_match.group(1))
@@ -51,6 +61,11 @@ def parse_qasm_subset(path: str | Path) -> tuple[int, list[GateInstance]]:
     return num_qubits, gates
 
 
+def snap_to_pool(gates: list[GateInstance], pool) -> list[GateInstance]:
+    """Restore exact pool angles for QASM inputs generated from a discrete pool."""
+    return [pool.snap(gate) for gate in gates]
+
+
 def write_qasm_subset(path: str | Path, num_qubits: int, gates: list[GateInstance]) -> None:
     lines = [
         "OPENQASM 2.0;",
@@ -64,6 +79,8 @@ def write_qasm_subset(path: str | Path, num_qubits: int, gates: list[GateInstanc
             lines.append(f"{gate.name.lower()}({gate.theta:.4f}) q[{gate.qubits[0]}];")
         elif gate.name == "RXX":
             lines.append(f"rxx({gate.theta:.4f}) q[{gate.qubits[0]}], q[{gate.qubits[1]}];")
+        elif gate.name == "CZ":
+            lines.append(f"cz q[{gate.qubits[0]}], q[{gate.qubits[1]}];")
         else:
             raise ValueError(f"Unsupported gate for writer: {gate.name}")
 

@@ -4,17 +4,23 @@ from dataclasses import dataclass
 from itertools import combinations
 from typing import Optional
 
-from .config import DEFAULT_ANGLES, GateInstance, GateSetName
+from .config import ANGLE_EPS, DEFAULT_ANGLES, GateInstance, GateSet, GateSetName, gateset_for
 
 
 @dataclass
 class TokenPool:
     num_qubits: int
-    gate_set: GateSetName
-    angles: tuple[float, ...] = DEFAULT_ANGLES
-    rxx_angles: Optional[tuple[float, ...]] = None
+    gate_set: GateSetName | GateSet
+    angles: Optional[tuple[float, ...]] = None
+    two_qubit_angles: Optional[tuple[float, ...]] = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.gate_set, str):
+            self.gate_set = gateset_for(self.gate_set)
+        if self.angles is None:
+            self.angles = self.gate_set.angles
+        if self.two_qubit_angles is None:
+            self.two_qubit_angles = self.gate_set.two_angles
         self._token_to_gate: dict[int, GateInstance] = {}
         self._gate_to_token: dict[GateInstance, int] = {}
         self._build()
@@ -25,24 +31,21 @@ class TokenPool:
         self._gate_to_token[gate] = token
 
     def _build(self) -> None:
-        single_names = ["RX", "RZ"]
-        two_qubit_names = ["CZ"]
-        if self.gate_set == "ion_trap":
-            single_names = ["RX", "RY", "RZ"]
-            two_qubit_names = ["RXX"]
-
-        for name in single_names:
+        gs = self.gate_set
+        angles = self.angles
+        for name in gs.single_qubit:
             for qubit in range(self.num_qubits):
-                for theta in self.angles:
+                for theta in angles:
                     self._add(GateInstance(name=name, qubits=(qubit,), theta=theta))
 
-        for name in two_qubit_names:
-            for q0, q1 in combinations(range(self.num_qubits), 2):
-                if name == "CZ":
+        two_angles = self.two_qubit_angles if self.two_qubit_angles is not None else gs.two_angles
+        for name in gs.two_qubit:
+            if name == "CZ":
+                for q0, q1 in combinations(range(self.num_qubits), 2):
                     self._add(GateInstance(name=name, qubits=(q0, q1), theta=None))
-                else:
-                    thetas = self.rxx_angles if self.rxx_angles is not None else self.angles
-                    for theta in thetas:
+            else:
+                for q0, q1 in combinations(range(self.num_qubits), 2):
+                    for theta in two_angles:
                         self._add(GateInstance(name=name, qubits=(q0, q1), theta=theta))
 
     def gate_for_token(self, token: int) -> GateInstance:
@@ -62,3 +65,25 @@ class TokenPool:
 
     def encode(self, gates: list[GateInstance]) -> list[int]:
         return [self.token_for_gate(gate) for gate in gates]
+
+    def snap(self, gate: GateInstance) -> GateInstance:
+        """Return a pool gate equivalent to ``gate`` if one exists within ANGLE_EPS.
+
+        Used to restore exactness for QASM inputs whose angles were rounded to a
+        few decimals but were generated from a discrete pool.
+        """
+        gs = self.gate_set
+        if gate.name in gs.single_qubit and gate.theta is not None:
+            best = min(gs.angles, key=lambda a: abs(a - gate.theta))
+            if abs(best - gate.theta) <= ANGLE_EPS:
+                return GateInstance(name=gate.name, qubits=tuple(sorted(gate.qubits)), theta=best)
+        if gate.name in gs.two_qubit:
+            qubits = tuple(sorted(gate.qubits))
+            if gate.name == "CZ":
+                return GateInstance(name=gate.name, qubits=qubits, theta=None)
+            if gate.theta is not None:
+                best = min(self.two_qubit_angles if self.two_qubit_angles is not None else gs.two_angles,
+                           key=lambda a: abs(a - gate.theta))
+                if abs(best - gate.theta) <= ANGLE_EPS:
+                    return GateInstance(name=gate.name, qubits=qubits, theta=best)
+        return gate

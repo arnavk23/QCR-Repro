@@ -3,26 +3,56 @@ from __future__ import annotations
 import numpy as np
 
 
-def remove_global_phase(unitary: np.ndarray, atol: float = 1e-12) -> np.ndarray:
-    flat = unitary.reshape(-1)
-    idx = None
-    for i, value in enumerate(flat):
-        if abs(value) > atol:
-            idx = i
-            break
-    if idx is None:
-        return unitary.copy()
-    phase = np.angle(flat[idx])
+def _reference_index(unitary: np.ndarray, arground: int = 8) -> int:
+    """Index of the phase-normalization reference entry.
+
+    The reference is the argmax of the *rounded* magnitudes.  For unitaries
+    whose entries have repeated maximal magnitudes (e.g. all entries of
+    RX(pi/2) equal 1/sqrt(2)), a raw argmax is unstable under floating-point
+    perturbations and would produce different keys for the same unitary.  After
+    rounding the magnitudes the tie is resolved deterministically (first index),
+    which keeps the key stable for every equivalent computation.
+    """
+    mag = np.abs(unitary.reshape(-1))
+    return int(np.argmax(np.round(mag, arground)))
+
+
+def remove_global_phase(unitary: np.ndarray) -> np.ndarray:
+    """Return a copy of `unitary` with a robust, deterministic global phase."""
+    idx = _reference_index(unitary)
+    phase = np.angle(unitary.reshape(-1)[idx])
     return unitary * np.exp(-1j * phase)
 
 
+def normalized_stack(unitary: np.ndarray) -> np.ndarray:
+    """Phase-normalized (real, imag) interleaved vector of ``unitary``."""
+    normalized = remove_global_phase(unitary)
+    return np.stack((normalized.real, normalized.imag), axis=-1).reshape(-1)
+
+
+def coarse_key(unitary: np.ndarray, decimals: int = 4) -> bytes:
+    return key_from_stack(normalized_stack(unitary), decimals)
+
+
+def fine_key(unitary: np.ndarray, decimals: int = 10) -> bytes:
+    return key_from_stack(normalized_stack(unitary), decimals)
+
+
+def key_from_stack(stack: np.ndarray, decimals: int) -> bytes:
+    rounded = np.round(stack, decimals=decimals) + 0.0
+    return rounded.tobytes()
+
+
 def equivalent_up_to_global_phase(u: np.ndarray, v: np.ndarray, atol: float = 1e-5) -> bool:
+    """Check ``u`` and ``v`` are equal up to a global phase within ``atol``.
+
+    Uses the optimal-global-scale residual of the reference MATLAB ``compare.m``:
+    the Frobenius norm of ``v - u * scale`` after fitting the scalar ``scale``.
+    """
     if u.shape != v.shape:
         return False
-    return np.allclose(remove_global_phase(u), remove_global_phase(v), atol=atol, rtol=0)
-
-
-def unitary_key(unitary: np.ndarray, decimals: int = 5) -> tuple[tuple[float, float], ...]:
-    normalized = remove_global_phase(unitary)
-    rounded = np.round(normalized.real, decimals=decimals) + 1j * np.round(normalized.imag, decimals=decimals)
-    return tuple((float(value.real), float(value.imag)) for value in rounded.reshape(-1))
+    a = u.reshape(-1)
+    b = v.reshape(-1)
+    scale = np.vdot(a, b) / np.vdot(a, a)
+    residual = np.linalg.norm(b - scale * a)
+    return residual <= atol
