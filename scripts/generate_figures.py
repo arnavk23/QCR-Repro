@@ -105,6 +105,11 @@ def load_rows(path: Path):
         return list(csv.DictReader(f))
 
 
+def _csv_ok(path: Path) -> bool:
+    """True if the data file exists and is non-empty (figures warn+skip otherwise)."""
+    return path.exists() and path.stat().st_size > 0
+
+
 # --------------------------------------------------------------------------- #
 # Figures 1-6: paper-protocol reproduction
 # --------------------------------------------------------------------------- #
@@ -192,6 +197,9 @@ def _input_composition(gateset: str, n_circuits: int, weights) -> dict[str, floa
 
 def fig3_gate_composition():
     """Input vs reduced gate composition (mean counts over the comparison runs)."""
+    if not (_csv_ok(COMPARISON_ION_CSV) and _csv_ok(COMPARISON_NISQ_CSV)):
+        print("WARNING: figure3 skipped (results/comparison CSVs missing)")
+        return
     ion_rows = [r for r in load_rows(COMPARISON_ION_CSV) if r["end"] != "-1"]
     nisq_rows = [r for r in load_rows(COMPARISON_NISQ_CSV) if r["end"] != "-1"]
     n_ion = len({r["seed"] for r in ion_rows}) or 24
@@ -226,10 +234,12 @@ def fig3_gate_composition():
         ax.set_ylabel("Mean gate count (per circuit)")
         ax.set_title(title)
         ax.legend()
-        # percentage reduction annotation per type
+        # percentage reduction annotation per type (above the taller bar's label)
         for xi, (iv, rv) in zip(x, zip(in_vals, red_vals)):
+            if iv <= 0:
+                continue
             ax.annotate(f"{-100.0 * (rv - iv) / iv:.0f}%", (xi, max(iv, rv)),
-                        xytext=(0, 12), textcoords="offset points", ha="center",
+                        xytext=(0, 16), textcoords="offset points", ha="center",
                         fontsize=8, color="#555555")
 
     fig.suptitle("Figure 3: Gate composition of input vs reduced circuits\n"
@@ -342,7 +352,7 @@ def fig6_boxplot(strict_rows):
     for patch in bp["boxes"]:
         patch.set(facecolor="#dcebe2", edgecolor=OURS_C, linewidth=1.1)
     for i, d in enumerate(data, start=1):
-        ax.annotate(f"n={len(d)}", (i, min(d)), xytext=(0, 8),
+        ax.annotate(f"n={len(d)}", (i, max(d)), xytext=(0, 8),
                     textcoords="offset points", ha="center", fontsize=8.5,
                     color="#555555")
     ax.set_ylabel("End gate count")
@@ -403,6 +413,9 @@ def _comparison_bar(fig_title, ylabel, labels, methods, stats, paper_total, out_
 
 def fig7_comparison_ion():
     """Total gate counts, ion-trap pool: paper vs our reducers vs qiskit."""
+    if not _csv_ok(COMPARISON_ION_CSV):
+        print(f"WARNING: figure7 skipped ({COMPARISON_ION_CSV} missing)")
+        return
     stats = _comparison_stats(COMPARISON_ION_CSV)
     labels = ["Paper\n'Ours'", "exact_len\n(ours)", "exact_cost\n(ours)",
               "qiskit\nL1", "qiskit\nL2", "qiskit\nL3"]
@@ -420,6 +433,9 @@ def fig7_comparison_ion():
 
 def fig8_comparison_nisq():
     """Total gate counts, NISQ pool: paper vs our reducers vs qiskit."""
+    if not _csv_ok(COMPARISON_NISQ_CSV):
+        print(f"WARNING: figure8 skipped ({COMPARISON_NISQ_CSV} missing)")
+        return
     stats = _comparison_stats(COMPARISON_NISQ_CSV)
     labels = ["Paper\n'Ours'", "numeric_len\n(ours)", "numeric_cost\n(ours)",
               "qiskit\nL1", "qiskit\nL2", "qiskit\nL3"]
@@ -437,6 +453,9 @@ def fig8_comparison_nisq():
 
 def fig9_two_qubit_counts():
     """Two-qubit gate counts (RXX/CZ): hardware-cost objective vs paper."""
+    if not (_csv_ok(COMPARISON_ION_CSV) and _csv_ok(COMPARISON_NISQ_CSV)):
+        print("WARNING: figure9 skipped (results/comparison CSVs missing)")
+        return
     ion = _comparison_stats(COMPARISON_ION_CSV)
     nisq = _comparison_stats(COMPARISON_NISQ_CSV)
 
@@ -462,7 +481,7 @@ def fig9_two_qubit_counts():
         for m in methods:
             values.append(stats[m]["twq"])
             errs.append(stats[m]["twq_std"])
-            colors.append(OURS_C if "len" in m else COST_C)
+            colors.append(OURS_C if m.endswith("_len") else COST_C)
         bars = ax.bar(labels, values, yerr=errs, capsize=3.5, color=colors,
                       edgecolor="#333333", linewidth=0.6, width=0.62)
         _bar_labels(ax, bars, fmt="{:.1f}", fontsize=9.5)
