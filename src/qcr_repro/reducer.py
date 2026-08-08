@@ -99,6 +99,43 @@ def _sweep_reduce(gates: list[GateInstance], num_qubits: int, db: ReductionDatab
     return total
 
 
+def _sweep_reduce_cost(
+    gates: list[GateInstance], num_qubits: int, db: ReductionDatabase, max_block_len: int
+) -> int:
+    """Exhaustive sweep minimizing (two-qubit count, length) per window.
+
+    Uses :meth:`ReductionDatabase.try_reduce_cost` so each replacement prefers
+    a factorization with fewer two-qubit gates (hardware decoherence cost)
+    among the strictly shorter candidates.  Returns the number of replacements.
+    """
+    total = 0
+    while True:
+        count = 0
+        pos = 0
+        n = len(gates)
+        while pos < n:
+            hi = min(max_block_len, n - pos)
+            replaced = False
+            for length in range(hi, 1, -1):
+                candidate = db.try_reduce_cost(gates[pos : pos + length])
+                # non-None implies lexicographic (twq, len) descent; equal-length
+                # replacements are safe because the objective is monotone.
+                if candidate is not None:
+                    gates[pos : pos + length] = candidate
+                    n = len(gates)
+                    count += 1
+                    replaced = True
+                    break
+            if replaced:
+                pos = max(0, pos - 1)
+            else:
+                pos += 1
+        total += count
+        if count == 0:
+            break
+    return total
+
+
 def sweep(gates: list[GateInstance], num_qubits: int, db: ReductionDatabase, max_len: int = 8) -> int:
     """Left-to-right exhaustive sweep over every window until no reduction found.
 
@@ -339,6 +376,62 @@ def reduce_with_database(
     return working, stats
 
 
+def reduce_with_lookup(
+    gates: list[GateInstance],
+    num_qubits: int,
+    local_qubits: int = 3,
+    max_block_len: int = 7,
+    graph_depth: int = 4,
+    iterations: int = 15000,
+    seed: int = 0,
+) -> tuple[list[GateInstance], ReductionStats]:
+    """Paper-style V2 reducer (MATLAB-demo port), rebuilt on current machinery.
+
+    Runs ``iterations`` random block-sampling steps against a wire-count
+    database of the ion-trap pool at the given graph depth, replacing sampled
+    blocks whenever the database yields a strictly shorter equivalent word.
+    This is the iteration-budgeted analogue of :func:`reduce_random_sampling`
+    and keeps the historical ``reduce_with_lookup`` interface used by the
+    paper-protocol benchmark and demo-port scripts.
+    """
+    from .compute_graph import load_or_build_database
+
+    if local_qubits < 2:
+        raise ValueError("local_qubits must be >= 2")
+
+    rng = random.Random(seed)
+    working = list(gates)
+    commute_cache: dict = {}
+    t0 = time.time()
+    start_len = len(gates)
+    replacements = 0
+    db = load_or_build_database(
+        "ion_trap", {w: graph_depth for w in range(1, local_qubits + 1)}, verbose=False
+    )
+
+    for _ in range(iterations):
+        if len(working) < 2:
+            break
+        if rng.random() < 0.7:
+            shuffle_commuting_pairs(working, num_qubits, rng, commute_cache)
+        start = rng.randrange(0, len(working) - 1)
+        hi = min(max_block_len, len(working) - start)
+        length = rng.randint(2, hi)
+        candidate = db.try_reduce(working[start : start + length])
+        if candidate is not None and len(candidate) < length:
+            working[start : start + length] = candidate
+            replacements += 1
+
+    stats = ReductionStats(
+        start_len=start_len,
+        end_len=len(working),
+        iterations=iterations,
+        replacements=replacements,
+        runtime_sec=time.time() - t0,
+    )
+    return working, stats
+
+
 def reduce_random_sampling(
     gates: list[GateInstance],
     num_qubits: int,
@@ -393,6 +486,7 @@ def reduce_circuit(
     escape_every: int = 3,
     prefer: dict[str, float] | None = None,
     rz_pass: bool = False,
+    cost_aware: bool = False,
 ) -> tuple[list[GateInstance], int, int]:
     """Strong reducer: cluster + collapse + sweep, transport shuffle, and escape.
 
@@ -400,7 +494,9 @@ def reduce_circuit(
     different (possibly longer) equivalent word from the compute graph's cycle
     structure, then re-sweeps; the change is kept only if it does not worsen
     the circuit.  ``rz_pass`` enables the NISQ-specific RZ-across-CZ transport
-    pass.  Returns (reduced, passes, replacements).
+    pass.  ``cost_aware=True`` minimizes (two-qubit count, length) per window
+    replacement instead of length alone (matches the exact engine's objective).
+    Returns (reduced, passes, replacements).
     """
     rng = random.Random(seed)
     working = list(gates)
@@ -411,6 +507,15 @@ def reduce_circuit(
     reduced = 0
     one_wire = db.graphs.get(1)
 
+    def sweep_fn(gates_list, num_qubits_, db_, max_block_len_) -> int:
+        """Cost-aware mode pushes both the (twq, len) and the pure-length
+        objective on every pass; length-only mode matches the paper's metric."""
+        if cost_aware:
+            return _sweep_reduce_cost(gates_list, num_qubits_, db_, max_block_len_) + _sweep_reduce(
+                gates_list, num_qubits_, db_, max_block_len_
+            )
+        return _sweep_reduce(gates_list, num_qubits_, db_, max_block_len_)
+
     def done() -> bool:
         return time.time() - t0 > budget_s or passes >= max_passes
 
@@ -418,14 +523,14 @@ def reduce_circuit(
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
         reduced += rz_global_pass(working, one_wire)
-    reduced += sweep(working, num_qubits, db, max_block_len)
+    reduced += sweep_fn(working, num_qubits, db, max_block_len)
     if done():
         return working, passes, reduced
     cluster_single_qubit(working, num_qubits)
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
         reduced += rz_global_pass(working, one_wire)
-    reduced += sweep(working, num_qubits, db, max_block_len)
+    reduced += sweep_fn(working, num_qubits, db, max_block_len)
     if done():
         return working, passes, reduced
 
@@ -435,13 +540,13 @@ def reduce_circuit(
         transport_shuffle(working, num_qubits, rng, cache, direction=1 if passes % 2 else -1)
         if rz_pass:
             reduced += rz_global_pass(working, one_wire)
-        found = sweep(working, num_qubits, db, max_block_len)
+        found = sweep_fn(working, num_qubits, db, max_block_len)
         if found == 0:
             cluster_single_qubit(working, num_qubits)
             found += reduce_single_wire_runs(working, one_wire)
             if rz_pass:
                 found += rz_global_pass(working, one_wire)
-            found += sweep(working, num_qubits, db, max_block_len)
+            found += sweep_fn(working, num_qubits, db, max_block_len)
         reduced += found
         if found == 0:
             stall += 1
@@ -469,7 +574,7 @@ def reduce_circuit(
                 trial[start : start + length] = candidate
                 cluster_single_qubit(trial, num_qubits)
                 reduce_single_wire_runs(trial, one_wire)
-                sweep(trial, num_qubits, db, max_block_len)
+                sweep_fn(trial, num_qubits, db, max_block_len)
                 if len(trial) < len(working):
                     working = trial
                     improved = True

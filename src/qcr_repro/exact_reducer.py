@@ -48,10 +48,102 @@ def _count_two_qubit(gates: list[GateInstance]) -> int:
     return sum(1 for g in gates if len(g.qubits) == 2)
 
 
+def _improves_cost(candidate: list[GateInstance], block: list[GateInstance]) -> bool:
+    """True if ``candidate`` is lexicographically better in (twq, len)."""
+    if len(candidate) < len(block):
+        return True
+    return len(candidate) == len(block) and _count_two_qubit(candidate) < _count_two_qubit(block)
+
+
+def _cost_weight(gate_name: str) -> float:
+    """Return a weight for a gate type that models hardware cost.
+
+    Lower is cheaper: single-qubit gates < two-qubit gates.
+    """
+    weights = {
+        "RX": 0.01,
+        "RY": 0.01,
+        "RZ": 0.01,
+        "CZ": 5.0,
+        "RXX": 5.0,
+        "RXY": 5.0,
+        "RYY": 5.0,
+    }
+    return weights.get(gate_name, 1.0)
+
+
+def _cost_weighted_reduction(
+    block: list[GateInstance],
+    db: SymplecticDatabase,
+    prefer: dict[str, float] | None = None,
+) -> tuple[list[GateInstance], float | None]:
+    """Reduce a block by minimizing (two-qubit count, length, cost).
+
+    The cost term is a linear combination of hardware-cost weights via ``prefer``.
+    Lower is better.
+
+    Returns (reduced_block, cost) where cost is the weighted sum of gates
+    in the candidate (None if no improvement).
+    """
+    # Get the SymplecticGraph for this block
+    graph = db._graph_for(block)
+    if graph is None:
+        return None, None
+
+    # Remap to graph-local wire indices
+    remapped, _, reverse = db._remap(block)
+    key = graph.block_key(remapped)
+    if key is None or key not in graph.buckets:
+        return None, None
+
+    # Get all Pareto-optimal candidates
+    cands = graph.alts.get(key, [])
+    if not cands:
+        return None, None
+
+    block_len = len(block)
+    block_twq = _count_two_qubit(block)
+    if prefer is None:
+        prefer = {}
+
+    best = None
+    best_key = None
+    for (twq, ln, chain) in cands:
+        # Accept strictly shorter candidates, and equal-length candidates that
+        # strictly reduce the two-qubit count (so cost-aware mode can rewrite
+        # e.g. CZ-heavy words into CZ-sparse ones of the same length, which the
+        # paper's length-only objective never attempts).
+        if ln > block_len:
+            continue
+        if ln == block_len and twq >= block_twq:
+            continue
+        # Decode and compute cost using prefer weights
+        decoded = graph.pool.decode(list(chain))
+        cand_cost = sum(prefer.get(g.name, 1.0) for g in decoded)
+        # Pareto-optimal by (two-qubit count, length) then cost
+        comparison = (twq, ln, cand_cost)
+        if best is None or comparison < best_key:
+            best = decoded
+            best_key = comparison
+
+    if best is None:
+        return None, None
+
+    # Restore to original wire indices
+    restored = db._restore(best, reverse)
+    return restored, best_key[2]
+
+
 def _sweep_reduce_cost(
-    gates: list[GateInstance], db: SymplecticDatabase, max_block_len: int
+    gates: list[GateInstance],
+    db: SymplecticDatabase,
+    max_block_len: int,
+    prefer: dict[str, float] | None = None,
 ) -> int:
-    """Exhaustive sweep minimizing (two-qubit count, length) over every window."""
+    """Exhaustive sweep minimizing (two-qubit count, length, cost).
+
+    Returns the number of replacements applied.
+    """
     total = 0
     while True:
         count = 0
@@ -61,8 +153,13 @@ def _sweep_reduce_cost(
             hi = min(max_block_len, n - pos)
             replaced = False
             for length in range(hi, 1, -1):
-                candidate = db.try_reduce_cost(gates[pos : pos + length])
-                if candidate is not None and len(candidate) < length:
+                candidate, cost = _cost_weighted_reduction(
+                    gates[pos : pos + length], db, prefer
+                )
+                # candidate is non-None only when it strictly improves
+                # (two-qubit count, length); equal-length replacements are safe
+                # because the lexicographic objective is monotone and bounded.
+                if candidate is not None:
                     gates[pos : pos + length] = candidate
                     n = len(gates)
                     count += 1
@@ -79,9 +176,12 @@ def _sweep_reduce_cost(
 
 
 def _sweep_reduce_len(
-    gates: list[GateInstance], db: SymplecticDatabase, max_block_len: int
+    gates: list[GateInstance],
+    db: SymplecticDatabase,
+    max_block_len: int,
+    prefer: dict[str, float] | None = None,
 ) -> int:
-    """Exhaustive sweep minimizing length only."""
+    """Exhaustive sweep minimizing length only (ignores prefer)."""
     total = 0
     while True:
         count = 0
@@ -113,17 +213,37 @@ def _random_escape_cost(
     db: SymplecticDatabase,
     max_block_len: int,
     rng: random.Random,
-    num_tries: int = 48,
+    num_tries: int = 64,
+    prefer: dict[str, float] | None = None,
 ) -> int:
+    """Escape: resample irreducible windows with structurally different words.
+
+    Tries ``num_tries`` random windows and accepts any candidate that
+    reduces (two-qubit count, length) under the hardware-cost model.
+    """
     n = len(gates)
     count = 0
+
+    # Precompute token indices for quick two-qubit count estimation.
     for _ in range(num_tries):
         if n < 2:
             break
         start = rng.randrange(0, n - 1)
         hi = min(max_block_len, n - start)
         length = rng.randint(2, hi)
-        candidate = db.try_reduce_escape(gates[start : start + length], rng)
+
+        block = gates[start : start + length]
+        candidate = db.try_reduce_cost(block)
+
+        # Accept cost-aware reductions that strictly improve (twq, len); only
+        # apply escape resampling when it is strictly shorter (the escape move
+        # is meant to perturb, not grow, the circuit in this hot path).
+        if candidate is not None and _improves_cost(candidate, block):
+            gates[start : start + length] = candidate
+            n = len(gates)
+            count += 1
+            continue
+        candidate = db.try_reduce_escape(block, rng, prefer=prefer)
         if candidate is not None and len(candidate) < length:
             gates[start : start + length] = candidate
             n = len(gates)
@@ -141,12 +261,16 @@ def reduce_circuit_exact(
     cost_aware: bool = True,
     rz_pass: bool = False,
     max_passes: int = 20000,
+    prefer: dict[str, float] | None = None,
 ) -> tuple[list[GateInstance], ExactStats]:
     """Strong exact reducer: cluster + collapse + cost-aware sweep + transport.
 
     ``cost_aware=True`` minimizes (two-qubit count, length); otherwise length
     is minimized (matching the paper's objective).  Returns the reduced circuit
     and statistics.  Equivalence with the input is bit-exact up to global phase.
+
+    The ``prefer`` dictionary maps gate names to a cost weight.  Lower weights
+    make the gate more preferable (e.g. ``{"RX": 0.01, "CZ": 5.0}``).
     """
     rng = random.Random(seed)
     working = list(gates)
@@ -157,23 +281,43 @@ def reduce_circuit_exact(
     reduced = 0
     one_wire = db.graphs.get(1)
 
-    sweep = _sweep_reduce_cost if cost_aware else _sweep_reduce_len
-
     def done() -> bool:
         return time.time() - t0 > budget_s or passes >= max_passes
+
+    # Cost-aware preferences: RXX/CZ are expensive, single-qubit gates are cheap
+    if cost_aware and prefer is None:
+        prefer = {
+            "RX": 0.01,
+            "RY": 0.01,
+            "RZ": 0.01,
+            "CZ": 5.0,
+            "RXX": 5.0,
+            "RXY": 5.0,
+            "RYY": 5.0,
+        }
+
+    def do_sweeps(gates_list: list[GateInstance], db_, max_block_len_) -> int:
+        """Cost-aware mode runs the (twq, len) sweep and then the pure-length
+        sweep, so both objectives are pushed on every pass; length-only mode
+        keeps the paper's single objective."""
+        if cost_aware:
+            return _sweep_reduce_cost(gates_list, db_, max_block_len_, prefer) + _sweep_reduce_len(
+                gates_list, db_, max_block_len_
+            )
+        return _sweep_reduce_len(gates_list, db_, max_block_len_)
 
     cluster_single_qubit(working, num_qubits)
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
         reduced += rz_global_pass(working, one_wire)
-    reduced += sweep(working, db, max_block_len)
+    reduced += do_sweeps(working, db, max_block_len)
     if done():
         return working, _stats(gates, working, passes, reduced, t0)
     cluster_single_qubit(working, num_qubits)
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
         reduced += rz_global_pass(working, one_wire)
-    reduced += sweep(working, db, max_block_len)
+    reduced += do_sweeps(working, db, max_block_len)
     if done():
         return working, _stats(gates, working, passes, reduced, t0)
 
@@ -184,13 +328,13 @@ def reduce_circuit_exact(
         _transport_shuffle(working, num_qubits, rng, cache, direction=1 if passes % 2 else -1)
         if rz_pass:
             reduced += rz_global_pass(working, one_wire)
-        found = sweep(working, db, max_block_len)
+        found = do_sweeps(working, db, max_block_len)
         if found == 0:
             cluster_single_qubit(working, num_qubits)
             found += reduce_single_wire_runs(working, one_wire)
             if rz_pass:
                 found += rz_global_pass(working, one_wire)
-            found += sweep(working, db, max_block_len)
+            found += do_sweeps(working, db, max_block_len)
         reduced += found
         if found == 0:
             stall += 1
@@ -209,14 +353,14 @@ def reduce_circuit_exact(
                 start = rng.randrange(0, len(working) - 1)
                 hi = min(max_block_len, len(working) - start)
                 length = rng.randint(2, hi)
-                candidate = db.try_reduce_escape(working[start : start + length], rng)
+                candidate = db.try_reduce_escape(working[start : start + length], rng, prefer=prefer)
                 if candidate is None:
                     continue
                 trial = list(working)
                 trial[start : start + length] = candidate
                 cluster_single_qubit(trial, num_qubits)
                 reduce_single_wire_runs(trial, one_wire)
-                sweep(trial, db, max_block_len)
+                do_sweeps(trial, db, max_block_len)
                 if len(trial) < len(working):
                     working = trial
                     improved = True

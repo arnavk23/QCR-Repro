@@ -11,8 +11,8 @@ from qcr_repro.reducer import reduce_with_lookup
 from qcr_repro.unitary_utils import equivalent_up_to_global_phase
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "implementation" / "future_work"
-LONG_QASM = ROOT / "paper_code" / "QCOptimDemo" / "longcode10.txt"
+OUT_DIR = ROOT / "future_work"
+LONG_QASM = ROOT / "paper_demo" / "QCOptimDemo" / "longcode10.txt"
 
 
 def gate_count_ops(qc) -> int:

@@ -183,16 +183,26 @@ class SymplecticGraph:
 
     def try_reduce_cost(self, block: list[GateInstance]) -> list[GateInstance] | None:
         """Reduce ``block`` minimizing (two-qubit count, length) among all
-        stored factorizations of its unitary that are strictly shorter."""
+        stored factorizations of its unitary.
+
+        Accepts strictly shorter candidates and equal-length candidates with a
+        strictly lower two-qubit count (lexicographic (twq, len) descent).
+        """
         key = self.block_key(block)
         if key is None:
             return None
         cands = self.alts.get(key)
         if not cands:
             return None
+        block_twq = _twq_of_chain(tuple(self.pool.token_for_gate(g) for g in block), self.pool)
+        block_len = len(block)
         best: tuple[int, int, tuple[int, ...]] | None = None
         for (twq, ln, chain) in cands:
-            if ln < len(block) and (best is None or (twq, ln) < (best[0], best[1])):
+            if ln > block_len:
+                continue
+            if ln == block_len and twq >= block_twq:
+                continue
+            if best is None or (twq, ln) < (best[0], best[1]):
                 best = (twq, ln, chain)
         if best is None:
             return None

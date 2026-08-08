@@ -22,6 +22,11 @@ def _token_type_counts(gates: list[GateInstance]) -> dict[str, int]:
     return counts
 
 
+def _chain_two_qubit(chain: tuple[int, ...], pool: TokenPool) -> int:
+    """Number of two-qubit gates in a stored token chain."""
+    return sum(1 for tok in chain if len(pool.gate_for_token(tok).qubits) == 2)
+
+
 @dataclass
 class ComputeGraph:
     """Exhaustive compute graph over a token pool up to ``max_depth``.
@@ -141,6 +146,41 @@ class ComputeGraph:
         key = self._node_key(flat * np.exp(-1j * phase), self.digest_decimals)
         return key if key in self.buckets else None
 
+    def try_reduce_cost(self, block: list[GateInstance]) -> list[GateInstance] | None:
+        """Reduce ``block`` minimizing (two-qubit count, length).
+
+        Considers every stored factorization of the block's unitary (the BFS
+        shortest word plus the alternative chains found through graph cycles)
+        and returns the best one that is strictly shorter or equal-length with
+        strictly fewer two-qubit gates -- a numeric analogue of the cost-aware
+        objective the exact engine implements for Clifford pools.
+        """
+        u = self.block_unitary(block)
+        if u is None:
+            return None
+        key = self._lookup_key(u)
+        if key is None:
+            return None
+        block_twq = sum(1 for g in block if len(g.qubits) == 2)
+        block_len = len(block)
+        candidates = [self.buckets[key]] + list(self._alt_lists().get(key, ()))
+        seen: set[tuple[int, ...]] = set()
+        best: tuple[int, int, tuple[int, ...]] | None = None
+        for chain in candidates:
+            if chain in seen:
+                continue
+            seen.add(chain)
+            if len(chain) > block_len:
+                continue
+            if len(chain) == block_len and _chain_two_qubit(chain, self.pool) >= block_twq:
+                continue
+            twq = _chain_two_qubit(chain, self.pool)
+            if best is None or (twq, len(chain)) < (best[0], best[1]):
+                best = (twq, len(chain), chain)
+        if best is None:
+            return None
+        return self.pool.decode(list(best[2]))
+
     def try_reduce_escape(
         self,
         block: list[GateInstance],
@@ -259,6 +299,34 @@ class ReductionDatabase:
     def load(cls, path: Path) -> "ReductionDatabase":
         with path.open("rb") as file:
             return pickle.load(file)
+
+    def try_reduce_cost(self, block: list[GateInstance]) -> list[GateInstance] | None:
+        """Cost-aware reduction (minimizes two-qubit count, then length)."""
+        wires = sorted({q for gate in block for q in gate.qubits})
+        wire_count = len(wires)
+        graph = self.graphs.get(wire_count)
+        if graph is None:
+            return None
+
+        forward = {wire: idx for idx, wire in enumerate(wires)}
+        reverse = {idx: wire for wire, idx in forward.items()}
+        remapped: list[GateInstance] = []
+        for gate in block:
+            qubits = tuple(sorted(forward[q] for q in gate.qubits))
+            remapped.append(GateInstance(name=gate.name, qubits=qubits, theta=gate.theta))
+
+        candidate = graph.try_reduce_cost(remapped)
+        if candidate is None:
+            return None
+
+        return [
+            GateInstance(
+                name=gate.name,
+                qubits=tuple(sorted(reverse[q] for q in gate.qubits)),
+                theta=gate.theta,
+            )
+            for gate in candidate
+        ]
 
     def try_reduce(self, block: list[GateInstance]) -> list[GateInstance] | None:
         """Reduce ``block`` (gates on arbitrary wires) if a shorter equivalent exists.

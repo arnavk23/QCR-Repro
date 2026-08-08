@@ -1,2 +1,14 @@
-/.venv
+# Python
+__pycache__/
+*.pyc
+.venv/
+.cache/
+
+# LaTeX build artifacts
+*.aux
+*.out
+*.log
+
+# OS files
 /Git-2.53.0.2-64-bit.exe
+.DS_Store

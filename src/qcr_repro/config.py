@@ -6,7 +6,7 @@ from typing import Literal
 
 DEFAULT_ANGLES = (-pi / 2, -pi / 4, pi / 4, pi / 2)
 PAPER_ION_ANGLES = (-pi / 2, pi / 2)
-GateSetName = Literal["nisq", "ion_trap"]
+GateSetName = Literal["nisq", "ion_trap", "nisq_clifford"]
 
 ANGLE_EPS = 1e-3
 
@@ -58,9 +58,17 @@ NISQ = GateSet(
     angles=DEFAULT_ANGLES,
 )
 
+NISQ_CLIFFORD_GATE_SET = GateSet(
+    name="nisq_clifford",
+    single_qubit=("RX", "RZ"),
+    two_qubit=("CZ",),
+    angles=(pi / 2, -pi / 2),  # Clifford subset: only ±π/2 rotations
+)
+
 GATE_SETS: dict[GateSetName, GateSet] = {
     "ion_trap": ION_TRAP,
     "nisq": NISQ,
+    "nisq_clifford": NISQ_CLIFFORD_GATE_SET,
 }
 
 

@@ -14,11 +14,14 @@ def key(row: dict[str, str]) -> tuple[str, str]:
 
 
 def main() -> None:
-    root = Path("results")
-    strict_group = load_csv(root / "paper_style_strict.csv")
-    loose_group = load_csv(root / "paper_style_loose.csv")
-    strict_runs = load_csv(root / "benchmark_reducer.csv")
-    loose_runs = load_csv(Path("results_tol1e3") / "benchmark_reducer.csv")
+    strict_dir = Path("results/paper_protocol_1e-5")
+    loose_dir = Path("results/paper_protocol_1e-3")
+    strict_group = load_csv(strict_dir / "paper_style_strict.csv")
+    loose_group = load_csv(strict_dir / "paper_style_loose.csv")
+    strict_runs = load_csv(strict_dir / "benchmark_reducer.csv")
+    loose_runs = load_csv(loose_dir / "benchmark_reducer.csv")
+
+    out_root = strict_dir
 
     loose_map = {key(r): r for r in loose_group}
 
@@ -44,7 +47,7 @@ def main() -> None:
             }
         )
 
-    out_csv = root / "submission_report_table.csv"
+    out_csv = out_root / "submission_report_table.csv"
     with out_csv.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(combined_rows[0].keys()))
         writer.writeheader()
@@ -56,7 +59,7 @@ def main() -> None:
     best_strict = min(strict_valid, key=lambda r: (int(r["end_len"]), float(r["runtime_sec"])))
     best_loose = min(loose_valid, key=lambda r: (int(r["end_len"]), float(r["runtime_sec"])))
 
-    out_md = root / "submission_report.md"
+    out_md = out_root / "submission_report.md"
     with out_md.open("w", encoding="utf-8") as f:
         f.write("# Reproduction Benchmark Report\n\n")
         f.write("## Best configurations\n")

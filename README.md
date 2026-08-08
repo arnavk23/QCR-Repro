@@ -1,122 +1,114 @@
-# Optimization Driven Quantum Circuit Reduction — Implementation Workspace
+# Optimization-Driven Quantum Circuit Reduction — Implementation & Comparison
 
-This repository contains a working, reproducible implementation workflow for the paper:
+This repository is a working, reproducible implementation of
 
-**Bodo Rosenhahn et al., “Optimization driven quantum circuit reduction,” New J. Phys. 27 (2025) 104509**
+**Bodo Rosenhahn, Tobias J Osborne, Christoph Hirche, "Optimization driven quantum circuit reduction," New J. Phys. 27 (2025) 104509**
 
-The project now includes:
-- extracted reference MATLAB demo code,
-- Python reimplementation and experiment scripts,
-- benchmark outputs (strict and loose validation settings),
-- generated figures,
-- an academic LaTeX report and compiled PDF,
-- a concrete `future_work` folder for baseline parity and hardware-metric probing.
+built around the paper's local term-replacement scheme (variants V1–V3), and it
+adds an **original exact engine** that reduces the paper's own test circuits
+further than the paper's reported results on the ion-trap gate set, while
+staying bit-exact (no 1e-5 tolerance anywhere).
 
-## 1) Reference code from paper [38]
+Headline comparison (`results/comparison/`, 4 qubits, 300-gate random
+circuits, identical circuits for every method):
 
-The provided archive is extracted at:
-- [paper_code/QCOptimDemo](paper_code/QCOptimDemo)
+| Gate set | Paper "Ours" | Our exact reducer | Difference |
+|---|---|---|---|
+| Ion trap (RX/RY/RZ/RXX) | 111 gates (RXX 43) | **73.0 gates (RXX 27.4)** | −34% |
+| NISQ (RX/RZ/CZ) | 107 gates (CZ 43) | 159 gates (CZ 50) | gap remains |
 
-Key files used for mapping behavior:
-- [paper_code/QCOptimDemo/optimCodeGMode1DComp.m](paper_code/QCOptimDemo/optimCodeGMode1DComp.m)
-- [paper_code/QCOptimDemo/FullQCGraphIOn3_4.m](paper_code/QCOptimDemo/FullQCGraphIOn3_4.m)
-- [paper_code/QCOptimDemo/QoperatorsIon1.m](paper_code/QCOptimDemo/QoperatorsIon1.m)
+On NISQ our qiskit baseline replication matches the paper's reported qiskit
+numbers (153 vs 149 on L2/L3), confirming the protocol is faithful and the
+comparison is fair; the remaining NISQ gap is database-memory limited on this
+laptop (see below).
 
-## 2) Python implementation
+## Repository layout
 
-Core package:
-- [src/qcr_repro](src/qcr_repro)
-
-Implemented modules include:
-- gate/unitary construction,
-- tokenization and operator pools,
-- global-phase-aware equivalence checks,
-- compute-graph generation,
-- MATLAB-demo-compatible QASM I/O,
-- local replacement reducer.
-
-## 3) Main scripts
-
-- [scripts/run_matlab_demo_port.py](scripts/run_matlab_demo_port.py): run reducer on MATLAB demo QASM.
-- [scripts/compare_qasm.py](scripts/compare_qasm.py): compare two QASM files up to global phase.
-- [scripts/benchmark_reducer.py](scripts/benchmark_reducer.py): sweep depth/iterations/seeds.
-- [scripts/summarize_benchmarks.py](scripts/summarize_benchmarks.py): grouped paper-style summary tables.
-- [scripts/build_submission_report.py](scripts/build_submission_report.py): consolidated submission tables.
-- [scripts/generate_paper_style_figures.py](scripts/generate_paper_style_figures.py): generate implementation figure set.
-- [scripts/future_work_baselines.py](scripts/future_work_baselines.py): baseline parity + hardware probe artifacts.
-
-## 4) Environment status
-
-Python + virtual environment are already set up in this workspace:
-- [.venv](.venv)
-
-Use:
-
-```powershell
-$env:PYTHONPATH='src'
-& .\.venv\Scripts\python.exe --version
+```
+paper_demo/         reference MATLAB demo from the paper (QCOptimDemo)
+src/qcr_repro/      Python package: gate/token models, numeric compute-graph DB,
+                    exact symplectic engine, reducers, QASM I/O
+scripts/            benchmarks, figure generation, report builders
+results/            benchmark outputs, organized by protocol
+  paper_protocol_1e-5/   paper-style sweep, strict tolerance (1e-5)
+  paper_protocol_1e-3/   paper-style sweep, loose tolerance (1e-3)
+  baselines/             numeric-reducer protocol runs (paper-style replication)
+  costaware_quick/       cost-aware exact engine quick runs
+  comparison/            head-to-head comparison benchmark (CSV + reports)
+figures/            generated figures (1-6 reproduction, 7-9 comparison)
+report/             reproduction report (LaTeX + Markdown), data
+future_work/        baseline parity + hardware-metrics probes
 ```
 
-If reinstalling dependencies is needed:
+## Quickstart
 
-```powershell
-$env:PYTHONPATH='src'
-& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```bash
+python -m pip install -r requirements.txt   # numpy scipy qiskit bqskit ...
+export PYTHONPATH=src
+python scripts/benchmark_basic.py            # quick smoke run
 ```
 
-## 5) Reproduced benchmark outputs
+## Head-to-head comparison with the paper
 
-Strict tolerance sweep (`atol=1e-5`):
-- [results/benchmark_reducer.csv](results/benchmark_reducer.csv)
-- [results/benchmark_summary.txt](results/benchmark_summary.txt)
+The flagship benchmark is `scripts/benchmark_comparison.py`. It replicates the
+paper's Tables 6/7 protocol (4 qubits, length 300, matching input composition
+per gate set), runs our reducers **and** the paper's baseline compilers on the
+same circuits, and writes a comparison report with per-method verdicts:
 
-Loose tolerance sweep (`atol=1e-3`):
-- [results_tol1e3/benchmark_reducer.csv](results_tol1e3/benchmark_reducer.csv)
-- [results_tol1e3/benchmark_summary.txt](results_tol1e3/benchmark_summary.txt)
+```bash
+PYTHONPATH=src python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 100 --budget 30
+PYTHONPATH=src python scripts/benchmark_comparison.py --gateset nisq    --num-circuits 100 --budget 30
+# deeper NISQ databases (slower one-time build, better NISQ results):
+PYTHONPATH=src python scripts/benchmark_comparison.py --gateset nisq --deep
+```
 
-Combined submission-style tables:
-- [results/submission_report_table.csv](results/submission_report_table.csv)
-- [results/submission_report.md](results/submission_report.md)
+Note: the first run per gate set builds the lookup databases (cached in the
+gitignored `.cache/`): ion trap is quick, NISQ takes ~1 minute at default
+depths, and `--deep` (3-wire depth 6) needs more memory than a typical laptop.
 
-## 6) Generated figures
+Outputs land in `results/comparison/`: per-run CSVs, a Markdown report with
+per-type means, WIN/LOSE verdicts vs the paper's numbers, and a baseline
+fidelity check against the paper's reported qiskit/BQSKit means.
 
-Implementation figure set:
-- [implementation/figures](implementation/figures)
+What makes our reducers strong:
 
-Includes:
-- [implementation/figures/figure1_motivation.png](implementation/figures/figure1_motivation.png)
-- [implementation/figures/figure2_compute_graph_growth.png](implementation/figures/figure2_compute_graph_growth.png)
-- [implementation/figures/figure3_pipeline.png](implementation/figures/figure3_pipeline.png)
-- [implementation/figures/figure4_reduction_curve.png](implementation/figures/figure4_reduction_curve.png)
-- [implementation/figures/figure5_runtime_vs_length.png](implementation/figures/figure5_runtime_vs_length.png)
-- [implementation/figures/figure6_boxplot.png](implementation/figures/figure6_boxplot.png)
+- **Exact symplectic engine** (`src/qcr_repro/symplectic.py`): Clifford-pool
+  lookups are keyed by a bit-exact signed tableau — replacements are equivalent
+  up to global phase *by construction*, and final verification is exact.
+- **Cost-aware objective**: every lookup minimizes (two-qubit count, length) —
+  the decoherence objective the paper defers to future work — including
+  equal-length rewrites that cut RXX/CZ count.
+- **Structural passes**: exhaustive window sweeps, single-qubit clustering and
+  1-wire collapse, transport shuffling, an RZ-across-CZ pass (NISQ), and
+  equivalence-class escape moves with restart-from-best.
 
-## 7) Final report
+## Reproducing the paper protocol (numeric, tolerance-based)
 
-LaTeX source:
-- [implementation/report/reproduction_report.tex](implementation/report/reproduction_report.tex)
+- `scripts/benchmark_sweep.py` — depth/iteration/seed sweep on the demo circuit
+  (`results/paper_protocol_1e-5/`, `results/paper_protocol_1e-3/`)
+- `scripts/benchmark_paper_protocol.py` — 100-run Table 6/7-style stats
+- `scripts/benchmark_exact.py` — head-to-head numeric vs exact reducers
+- `scripts/benchmark_basic.py`, `scripts/benchmark_best_of.py` — quick runners
+- `scripts/run_matlab_demo_port.py` — reduce the MATLAB demo QASM files
+- `scripts/compare_qasm.py` — unitary equivalence check between two QASM files
+- `scripts/summarize_benchmarks.py`, `scripts/build_submission_report.py` —
+  grouped summaries and combined strict/loose tables
 
-Compiled PDF:
-- [implementation/report/reproduction_report.pdf](implementation/report/reproduction_report.pdf)
+## Figures and report
 
-## 8) Future work folder (implemented)
+- `scripts/generate_figures.py` regenerates all figures into `figures/`
+  (figures 7–9 are the head-to-head comparisons).
+- `report/reproduction_report.tex` (and a GitHub-renderable
+  `report/reproduction_report.md`) documents the reproduction and the
+  comparison results.
 
-Artifacts generated in:
-- [implementation/future_work](implementation/future_work)
+## Future work
 
-Includes:
-- [implementation/future_work/baseline_parity_results.csv](implementation/future_work/baseline_parity_results.csv)
-- [implementation/future_work/hardware_metrics.json](implementation/future_work/hardware_metrics.json)
-- [implementation/future_work/future_work_status.md](implementation/future_work/future_work_status.md)
+`future_work/` contains baseline-parity results against qiskit, a BQSKit
+availability probe, and hardware-metric probing (requires authenticated
+hardware access, logged as unavailable here).
 
-Notes:
-- Qiskit parity baselines were executed and recorded.
-- BQSKit availability was verified and logged.
-- Hardware-level metrics probing is implemented; real backend metrics require authenticated provider access.
-
-## 9) Remaining gap to full paper parity
-
-The workspace now demonstrates a complete implementation pipeline for the provided demo and generated artifacts. Full parity with all paper claims still depends on:
-- complete official source release details beyond the demo subset,
-- exact hyperparameter/protocol settings used for all paper experiments,
-- hardware backend access/configuration for execution-level metrics.
+The main open lever is **NISQ**: the exact engine is Clifford-only, and the
+numeric NISQ pipeline still trails the paper (159 vs 107). The `--deep`
+databases (3-wire depth 6) and larger per-circuit budgets are expected to
+narrow this; the deep graphs need more memory than this laptop allows.

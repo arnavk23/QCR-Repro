@@ -1,7 +1,0 @@
-depth,iterations,runs,best_end_len_strict,mean_end_len_strict,std_end_len_strict,mean_runtime_sec_strict,eq_pass_rate_strict,best_end_len_loose,mean_end_len_loose,std_end_len_loose,mean_runtime_sec_loose,eq_pass_rate_loose
-3,500,3,266,274,5.89,7.114,1.0,266,274,5.89,0.578,1.0
-3,1000,3,246,250,4.32,17.29,0.667,246,250,4.32,0.743,1.0
-3,1500,3,240,242.67,2.49,26.56,0.667,240,242.67,2.49,0.887,1.0
-4,500,3,262,265.33,2.49,13.561,1.0,262,265.33,2.49,2.139,1.0
-4,1000,3,238,243.33,4.11,21.312,1.0,238,243.33,4.11,2.261,1.0
-4,1500,3,226,231.33,6.18,29.72,0.667,226,231.33,6.18,2.443,1.0
