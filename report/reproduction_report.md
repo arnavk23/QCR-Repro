@@ -166,6 +166,33 @@ numeric NISQ pipeline still trails the paper (159 vs 107) for database-memory
 reasons. Larger-memory machines and `--deep` graphs are the expected path to
 narrowing it.
 
+## 5. Pre-passes and the batched sweep
+
+Two additions to the numeric pipeline, both verified bit-exact or
+unitary-preserving in `scripts/check_batched_matches_scalar.py`:
+
+- **Algebraic / ZX pre-passes** (`src/qcr_repro/prepass.py`): deterministic,
+  search-free reductions applied before the DB loop — adjacent same-axis
+  rotation fusion (kept only when the sum snaps to a pool angle or cancels),
+  CZ·CZ cancellation, and (NISQ) RZ-gathering across CZ so runs fuse. On the
+  Table 7-style NISQ inputs this removes ~25% of the gates before any search;
+  on the ion-trap inputs (pool of only ±π/2) it removes the exact
+  cancellations. Output stays pool-representable; input unitary preserved.
+- **Batched sweep** (`src/qcr_repro/batched.py`): all window unitaries of a
+  pass are computed with batched numpy matmuls and vectorized phase
+  normalization. It is bit-identical to the scalar sweep and measures
+  ~1.5-1.7x faster on the length-300 ion-trap fixpoint; per-window SHA-256
+  digests remain the floor.
+
+`scripts/benchmark_prepass.py` compares baseline / prepass / prepass+batched
+under a fixed per-circuit budget (`results/prepass/`). At equal budget the
+prepass+batched pipeline ends with the same-or-better final lengths
+(ion-trap 89.5 vs 90.8 baseline; NISQ 159.2 vs 161.7) while spending less
+wall-clock per sweep; the ion-trap WIN over the paper's 111 gates is
+preserved. The batched sweep does not change which circuits are found — it
+only finds them faster, and the pre-passes make the input cheaper for the
+expensive loop.
+
 ## Reproducibility
 
 ```bash

@@ -487,6 +487,9 @@ def reduce_circuit(
     prefer: dict[str, float] | None = None,
     rz_pass: bool = False,
     cost_aware: bool = False,
+    algebraic: bool = False,
+    zx: bool = False,
+    use_batched: bool = False,
 ) -> tuple[list[GateInstance], int, int]:
     """Strong reducer: cluster + collapse + sweep, transport shuffle, and escape.
 
@@ -496,11 +499,25 @@ def reduce_circuit(
     the circuit.  ``rz_pass`` enables the NISQ-specific RZ-across-CZ transport
     pass.  ``cost_aware=True`` minimizes (two-qubit count, length) per window
     replacement instead of length alone (matches the exact engine's objective).
+
+    ``algebraic`` / ``zx`` enable the cheap pre-passes (qcr_repro.prepass) that
+    shrink the input *before* the database loop using exact rotation-fusion and
+    ZX-cancellation rules (fused angles are always pool-representable).
+    ``use_batched`` swaps the per-window scalar sweep for the vectorized batched
+    sweep (qcr_repro.batched), which is bit-identical in results (see
+    scripts/check_batched_matches_scalar.py).
     Returns (reduced, passes, replacements).
     """
     rng = random.Random(seed)
     working = list(gates)
-    best = list(gates)
+    if algebraic or zx:
+        from .prepass import apply_prepass
+
+        gs = gateset_for(db.gate_set_name)
+        angles = db.angles if db.angles is not None else gs.angles
+        two = db.two_qubit_angles if db.two_qubit_angles is not None else gs.two_angles
+        working, _ = apply_prepass(working, db.gate_set_name, angles, two, num_qubits, zx=zx)
+    best = list(working)
     cache: dict = {}
     t0 = time.time()
     passes = 0
@@ -509,11 +526,17 @@ def reduce_circuit(
 
     def sweep_fn(gates_list, num_qubits_, db_, max_block_len_) -> int:
         """Cost-aware mode pushes both the (twq, len) and the pure-length
-        objective on every pass; length-only mode matches the paper's metric."""
+        objective on every pass; length-only mode matches the paper's metric.
+        Batched mode (length objective only) is bit-identical to the scalar
+        sweep (see scripts/check_batched_matches_scalar.py)."""
         if cost_aware:
             return _sweep_reduce_cost(gates_list, num_qubits_, db_, max_block_len_) + _sweep_reduce(
                 gates_list, num_qubits_, db_, max_block_len_
             )
+        if use_batched:
+            from .batched import batched_sweep
+
+            return batched_sweep(gates_list, num_qubits_, db_, max_block_len_)
         return _sweep_reduce(gates_list, num_qubits_, db_, max_block_len_)
 
     def done() -> bool:

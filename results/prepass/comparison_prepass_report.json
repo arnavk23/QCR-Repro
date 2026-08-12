@@ -1,0 +1,52 @@
+{
+  "by_method": {
+    "baseline": {
+      "final_len_mean": 90.75,
+      "final_len_std": 14.655569394797128,
+      "total_mean": 90.75,
+      "twq_mean": 37.375,
+      "runtime_mean": 10.072967732375218,
+      "prepass_removed_mean": 0,
+      "prepass_len_mean": 300,
+      "exact_ok": true
+    },
+    "prepass": {
+      "final_len_mean": 92.125,
+      "final_len_std": 15.806305251838133,
+      "total_mean": 92.125,
+      "twq_mean": 36.75,
+      "runtime_mean": 10.076395360499646,
+      "prepass_removed_mean": 15.5,
+      "prepass_len_mean": 284.5,
+      "exact_ok": true
+    },
+    "prepass_batched": {
+      "final_len_mean": 89.5,
+      "final_len_std": 14.312831406019665,
+      "total_mean": 89.5,
+      "twq_mean": 36.875,
+      "runtime_mean": 10.028433377625333,
+      "prepass_removed_mean": 15.5,
+      "prepass_len_mean": 284.5,
+      "exact_ok": true
+    }
+  },
+  "paper": {
+    "RX": 10,
+    "RY": 29,
+    "RZ": 29,
+    "RXX": 43,
+    "total": 111
+  },
+  "paper_times": {
+    "V1-random": 199.0,
+    "V2-db": 55.0,
+    "V3-rf": 38.0
+  },
+  "args": {
+    "num_circuits": 8,
+    "budget": 10.0,
+    "length": 300,
+    "gateset": "ion_trap"
+  }
+}

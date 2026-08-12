@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .venv/
 .cache/
+*.egg-info/
+build/
+dist/
 
 # LaTeX build artifacts
 *.aux
@@ -10,5 +13,9 @@ __pycache__/
 *.log
 
 # OS files
-/Git-2.53.0.2-64-bit.exe
 .DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/

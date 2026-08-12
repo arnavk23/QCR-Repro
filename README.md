@@ -43,8 +43,10 @@ future_work/        baseline parity + hardware-metrics probes
 ## Quickstart
 
 ```bash
-python -m pip install -r requirements.txt   # numpy scipy qiskit bqskit ...
-export PYTHONPATH=src
+python -m pip install -e .
+# optional baseline compilers (only for scripts that compare against them):
+python -m pip install -e ".[baselines]"
+
 python scripts/benchmark_basic.py            # quick smoke run
 ```
 
@@ -56,10 +58,10 @@ per gate set), runs our reducers **and** the paper's baseline compilers on the
 same circuits, and writes a comparison report with per-method verdicts:
 
 ```bash
-PYTHONPATH=src python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 100 --budget 30
-PYTHONPATH=src python scripts/benchmark_comparison.py --gateset nisq    --num-circuits 100 --budget 30
+python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 100 --budget 30
+python scripts/benchmark_comparison.py --gateset nisq    --num-circuits 100 --budget 30
 # deeper NISQ databases (slower one-time build, better NISQ results):
-PYTHONPATH=src python scripts/benchmark_comparison.py --gateset nisq --deep
+python scripts/benchmark_comparison.py --gateset nisq --deep
 ```
 
 Note: the first run per gate set builds the lookup databases (cached in the
@@ -81,6 +83,35 @@ What makes our reducers strong:
 - **Structural passes**: exhaustive window sweeps, single-qubit clustering and
   1-wire collapse, transport shuffling, an RZ-across-CZ pass (NISQ), and
   equivalence-class escape moves with restart-from-best.
+
+## Pre-passes and the batched sweep
+
+Two cheap optimizations shrink and accelerate the database loop without
+changing its results:
+
+- `src/qcr_repro/prepass.py` — deterministic pre-passes applied *before* the
+  DB loop: adjacent same-axis rotation fusion (RZ(a)RZ(b) = RZ(a+b), same for
+  RX/RY/RXX, kept only when the sum snaps to a pool angle or cancels to the
+  identity) plus the cheapest ZX-calculus rules (adjacent CZ·CZ = I and, for
+  the diagonal-CZ pools, RZ-gathering across CZ so runs fuse). Every rule is
+  exact angle arithmetic, the output stays pool-representable, and the input
+  unitary is preserved (verified in
+  `scripts/check_batched_matches_scalar.py`).
+- `src/qcr_repro/batched.py` — a vectorized version of the exhaustive sweep:
+  all window unitaries of a pass are computed with batched matmuls and
+  vectorized phase normalization instead of per-window Python matrix products.
+  It is *bit-identical* to the scalar sweep (same protocol, same results) and
+  measures ~1.5-1.7x faster on the length-300 ion-trap fixpoint; the remaining
+  per-window cost is the SHA-256 digest.
+
+Both are opt-in flags of `reduce_circuit` (`algebraic`, `zx`, `use_batched`),
+so existing pipelines are unchanged by default. Run the head-to-head
+comparison (baseline vs prepass vs prepass+batched, plus the paper's numbers):
+
+    python scripts/benchmark_prepass.py --num-circuits 12 --budget 10 --length 300
+    python scripts/benchmark_prepass.py --gateset nisq --num-circuits 8 --budget 10
+
+Outputs land in `results/prepass/` (`comparison_prepass_report.md/csv/json`).
 
 ## Reproducing the paper protocol (numeric, tolerance-based)
 
