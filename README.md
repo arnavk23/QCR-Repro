@@ -1,6 +1,6 @@
 # Optimization-Driven Quantum Circuit Reduction — Implementation & Comparison
 
-This repository is a working, reproducible implementation of
+This repository is a working implementation of
 
 **Bodo Rosenhahn, Tobias J Osborne, Christoph Hirche, "Optimization driven quantum circuit reduction," New J. Phys. 27 (2025) 104509**
 
@@ -10,34 +10,35 @@ further than the paper's reported results on the ion-trap gate set, while
 staying bit-exact (no 1e-5 tolerance anywhere).
 
 Headline comparison (`results/comparison/`, 4 qubits, 300-gate random
-circuits, identical circuits for every method):
+circuits, identical circuits for every method, 100 circuits per method):
 
-| Gate set | Paper "Ours" | Our exact reducer | Difference |
+| Gate set | Paper "Ours" | Our reducers | Difference |
 |---|---|---|---|
-| Ion trap (RX/RY/RZ/RXX) | 111 gates (RXX 43) | **73.0 gates (RXX 27.4)** | −34% |
-| NISQ (RX/RZ/CZ) | 107 gates (CZ 43) | 159 gates (CZ 50) | gap remains |
+| Ion trap (RX/RY/RZ/RXX) | 111 gates (RXX 43) | **73.5 exact_len / 71.6 exact_cost (RXX 30.9 / 27.2)** | −34% / −36% |
+| NISQ (RX/RZ/CZ) | 107 gates (CZ 43) | 160.9 numeric_len / 160.5 numeric_cost (CZ 50.3 / 49.6) | gap remains |
 
 On NISQ our qiskit baseline replication matches the paper's reported qiskit
-numbers (153 vs 149 on L2/L3), confirming the protocol is faithful and the
-comparison is fair; the remaining NISQ gap is database-memory limited on this
-laptop (see below).
+numbers (158 vs 149 on L2/L3), confirming the protocol is faithful and the
+comparison is fair; the remaining NISQ gap is database-depth limited on this
+laptop. The NISQ levers below (RF-gated lookup, exact/numeric hybrid,
+disk-backed databases, larger honest budgets) are the path to closing it.
 
 ## Repository layout
 
 ```
-paper_demo/         reference MATLAB demo from the paper (QCOptimDemo)
+matlab_demo/         reference MATLAB demo from the paper (QCOptimDemo)
 src/qcr_repro/      Python package: gate/token models, numeric compute-graph DB,
                     exact symplectic engine, reducers, QASM I/O
 scripts/            benchmarks, figure generation, report builders
 results/            benchmark outputs, organized by protocol
-  paper_protocol_1e-5/   paper-style sweep, strict tolerance (1e-5)
-  paper_protocol_1e-3/   paper-style sweep, loose tolerance (1e-3)
-  baselines/             numeric-reducer protocol runs (paper-style replication)
-  costaware_quick/       cost-aware exact engine quick runs
+  demo_sweep/   paper-style sweep on the demo circuit
+    strict/             strict tolerance (1e-5)
+    loose/              loose tolerance (1e-3)
   comparison/            head-to-head comparison benchmark (CSV + reports)
-figures/            generated figures (1-6 reproduction, 7-9 comparison)
-report/             reproduction report (LaTeX + Markdown), data
-future_work/        baseline parity + hardware-metrics probes
+  paper_tables/            paper tables from benchmark data (scripts/generate_paper_tables.py)
+paper/              reference material (the paper PDF)
+figures/            generated figures (1-6 protocol runs, 7-9 comparison)
+report/             results report (LaTeX + Markdown), data
 ```
 
 ## Quickstart
@@ -47,7 +48,7 @@ python -m pip install -e .
 # optional baseline compilers (only for scripts that compare against them):
 python -m pip install -e ".[baselines]"
 
-python scripts/benchmark_basic.py            # quick smoke run
+python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 2 --budget 5 --no-baselines   # quick smoke run
 ```
 
 ## Head-to-head comparison with the paper
@@ -71,6 +72,13 @@ depths, and `--deep` (3-wire depth 6) needs more memory than a typical laptop.
 Outputs land in `results/comparison/`: per-run CSVs, a Markdown report with
 per-type means, WIN/LOSE verdicts vs the paper's numbers, and a baseline
 fidelity check against the paper's reported qiskit/BQSKit means.
+
+**Timing caveat.** The "time (s)" column in the comparison reports is the
+per-circuit **budget cap** (each reducer loops until its budget is exhausted)
+— it is a cutoff, not a convergence time, so it must not be read as an
+apple-to-apples timing comparison against the paper's Table 2 (which measures
+a different task: reducing 100-gate circuits to ~50, ~38 s for their best
+variant).
 
 What makes our reducers strong:
 
@@ -96,7 +104,7 @@ changing its results:
   the diagonal-CZ pools, RZ-gathering across CZ so runs fuse). Every rule is
   exact angle arithmetic, the output stays pool-representable, and the input
   unitary is preserved (verified in
-  `scripts/check_batched_matches_scalar.py`).
+  `scripts/check_batched_vs_scalar.py`).
 - `src/qcr_repro/batched.py` — a vectorized version of the exhaustive sweep:
   all window unitaries of a pass are computed with batched matmuls and
   vectorized phase normalization instead of per-window Python matrix products.
@@ -113,33 +121,73 @@ comparison (baseline vs prepass vs prepass+batched, plus the paper's numbers):
 
 Outputs land in `results/prepass/` (`comparison_prepass_report.md/csv/json`).
 
-## Reproducing the paper protocol (numeric, tolerance-based)
+## Paper protocol benchmark (numeric, tolerance-based)
 
-- `scripts/benchmark_sweep.py` — depth/iteration/seed sweep on the demo circuit
-  (`results/paper_protocol_1e-5/`, `results/paper_protocol_1e-3/`)
-- `scripts/benchmark_paper_protocol.py` — 100-run Table 6/7-style stats
+- `scripts/benchmark_demo_sweep.py` — depth/iteration/seed sweep on the demo circuit
+  (`results/demo_sweep/strict/`, `results/demo_sweep/loose/`)
+- `scripts/benchmark_protocol.py` — 100-run Table 6/7-style stats
 - `scripts/benchmark_exact.py` — head-to-head numeric vs exact reducers
-- `scripts/benchmark_basic.py`, `scripts/benchmark_best_of.py` — quick runners
-- `scripts/run_matlab_demo_port.py` — reduce the MATLAB demo QASM files
-- `scripts/compare_qasm.py` — unitary equivalence check between two QASM files
-- `scripts/summarize_benchmarks.py`, `scripts/build_submission_report.py` —
-  grouped summaries and combined strict/loose tables
+- `scripts/reduce_demo_circuits.py` — reduce the MATLAB demo QASM files
+- `scripts/build_protocol_report.py` — combined strict/loose report tables
 
 ## Figures and report
 
 - `scripts/generate_figures.py` regenerates all figures into `figures/`
   (figures 7–9 are the head-to-head comparisons).
-- `report/reproduction_report.tex` (and a GitHub-renderable
-  `report/reproduction_report.md`) documents the reproduction and the
+- `report/results_report.tex` (and a GitHub-renderable
+  `report/results_report.md`) documents the implementation and the
   comparison results.
 
-## Future work
+## NISQ levers (closing the Table 7 gap)
 
-`future_work/` contains baseline-parity results against qiskit, a BQSKit
-availability probe, and hardware-metric probing (requires authenticated
-hardware access, logged as unavailable here).
+The NISQ gap is a search-space problem, not an algorithmic one: the exact
+engine is Clifford-only, and the numeric fallback is limited by how deep a
+lookup database a laptop can build in memory. Four levers are implemented and
+opt-in from `scripts/benchmark_comparison.py`:
 
-The main open lever is **NISQ**: the exact engine is Clifford-only, and the
-numeric NISQ pipeline still trails the paper (159 vs 107). The `--deep`
-databases (3-wire depth 6) and larger per-circuit budgets are expected to
-narrow this; the deep graphs need more memory than this laptop allows.
+```bash
+# 1. larger, honestly-reported budgets (NISQ defaults to 60 s vs 30 s ion trap)
+python scripts/benchmark_comparison.py --gateset nisq --budget 60
+
+# 2. V3-style RF-gated lookup: an online RandomForest learns which blocks
+#    actually reduce, skipping useless DB lookups and freeing budget for
+#    useful ones (needs the optional extra: pip install -e ".[ml]")
+python scripts/benchmark_comparison.py --gateset nisq --rf-gate
+
+# 3. exact/numeric hybrid: Clifford-only windows (RX/RZ at +/-pi/2, CZ) are
+#    reduced by the bit-exact symplectic engine at deep graph depths; only
+#    genuinely non-Clifford (pi/4) windows hit the numeric database
+python scripts/benchmark_comparison.py --gateset nisq --hybrid
+
+# 4. disk-backed (SQLite) lookup databases so --deep runs on a laptop
+python scripts/benchmark_comparison.py --gateset nisq --deep            # = --backend sqlite
+python scripts/benchmark_comparison.py --gateset nisq --backend sqlite --depths 1:12,2:8,3:6,4:4
+```
+
+- `--rf-gate` implements the paper's V3 idea (RandomForest-gated lookup): an
+exact memo cache remembers already-tried irreducible blocks (a guaranteed
+win — repeated windows after transport shuffles are skipped at zero cost),
+and a lazily-trained classifier (sklearn `RandomForestClassifier`, optional
+`[ml]` extra) scores novel blocks. Skipping never changes equivalence — it
+only reallocates budget. **Measured caveat:** on this exhaustive-sweep
+reducer the classifier component is neutral-to-negative for end length
+(tested at 10-60 s budgets, `scripts/check_levers.py`
+and the tuning probes) — the sweep already terminates when no window
+reduces, so gating causes premature convergence. The paper's V3 gated their
+*random-sampling* loop, where DB lookups are the bottleneck; that is the
+regime where the classifier helps.
+- `--hybrid` routes every sweep window to the exact symplectic engine when it
+is fully Clifford (all angles ±π/2), falling back to the numeric database
+only for windows containing non-Clifford ±π/4 angles. The Clifford sub-pool
+graphs are small, so they can be built much deeper than the full NISQ pool.
+- `--backend sqlite` (implied by `--deep`) stores the compute-graph bucket
+tables on disk (SQLite, stdlib) with a bounded in-memory LRU instead of
+all-in-RAM dicts, so deep builds trade memory for disk. Verified
+bit-identical to the RAM backend
+(`scripts/check_levers.py`).
+- The cost-aware (two-qubit-first) objective already applies to CZ via
+`ReductionDatabase.try_reduce_cost` (the `numeric_cost` method), and the
+RZ-across-CZ pass now iterates to a fixpoint per invocation.
+- `scripts/check_levers.py` asserts every lever
+preserves the input unitary (1e-5) and that the SQLite backend matches
+RAM results exactly.

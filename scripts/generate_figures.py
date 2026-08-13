@@ -1,14 +1,9 @@
-"""Generate the full figure set (paper reproduction + head-to-head comparison).
+"""Generate the full figure set (paper protocol + head-to-head comparison).
 
-Figures 1-6 summarize the paper-protocol reproduction benchmark; figures 7-9
-plot the comparison against the paper's reported numbers (Rosenhahn et al.,
-Tables 6/7) using results/comparison.
-
-All figures share a consistent publication-style design (see ``_set_style``).
+Figures 1-6 summarize the paper-protocol sweep; figures 7-9 plot the comparison against the paper's Tables 6/7 numbers.
 
 Usage:
-    PYTHONPATH=src python scripts/generate_figures.py
-"""
+    PYTHONPATH=src python scripts/generate_figures.py"""
 
 from __future__ import annotations
 
@@ -22,14 +17,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from qcr_repro.circuits import count_gates, random_circuit
-from qcr_repro.qasm_io import parse_qasm_subset
+from qcr_repro.qasm import parse_qasm_subset
 from qcr_repro.reducer import reduce_with_lookup
 
 ROOT = Path(__file__).resolve().parents[1]
-STRICT_CSV = ROOT / "results" / "paper_protocol_1e-5" / "benchmark_reducer.csv"
-LOOSE_CSV = ROOT / "results" / "paper_protocol_1e-3" / "benchmark_reducer.csv"
-LONG_QASM = ROOT / "paper_demo" / "QCOptimDemo" / "longcode10.txt"
-SHORT_QASM = ROOT / "paper_demo" / "QCOptimDemo" / "shortcode10.txt"
+STRICT_CSV = ROOT / "results" / "demo_sweep" / "strict" / "benchmark_reducer.csv"
+LOOSE_CSV = ROOT / "results" / "demo_sweep" / "loose" / "benchmark_reducer.csv"
+LONG_QASM = ROOT / "matlab_demo" / "QCOptimDemo" / "longcode10.txt"
+SHORT_QASM = ROOT / "matlab_demo" / "QCOptimDemo" / "shortcode10.txt"
 COMPARISON_ION_CSV = ROOT / "results" / "comparison" / "comparison_ion_trap.csv"
 COMPARISON_NISQ_CSV = ROOT / "results" / "comparison" / "comparison_nisq.csv"
 OUT_DIR = ROOT / "figures"
@@ -111,12 +106,12 @@ def _csv_ok(path: Path) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Figures 1-6: paper-protocol reproduction
+# Figures 1-6: paper-protocol runs
 # --------------------------------------------------------------------------- #
 
 
 def fig1_motivation(strict_rows, loose_rows):
-    """Endpoints of the demo-circuit reproduction, with % reduction labels."""
+    """Endpoints of the demo-circuit runs, with % reduction labels."""
     _, long_gates = parse_qasm_subset(LONG_QASM)
     _, short_matlab = parse_qasm_subset(SHORT_QASM)
 
@@ -149,7 +144,7 @@ def fig1_motivation(strict_rows, loose_rows):
     _finish(fig, "figure1_motivation.png")
 
 
-def fig2_compute_graph_growth():
+def fig2_database_growth():
     """Compute-graph growth with depth (values from the paper, Table 1)."""
     depth_2q = np.array([1, 2, 3, 4, 5, 6])
     nodes_2q = np.array([15, 114, 584, 2024, 4512, 7420])
@@ -180,7 +175,7 @@ def fig2_compute_graph_growth():
     axes[0].set_ylabel("Count (log scale)")
     fig.suptitle("Figure 2: Compute-graph growth with depth\n(values from the paper, Table 1)",
                  fontsize=12, fontweight="bold")
-    _finish(fig, "figure2_compute_graph_growth.png")
+    _finish(fig, "figure2_database_growth.png")
 
 
 def _input_composition(gateset: str, n_circuits: int, weights) -> dict[str, float]:
@@ -303,11 +298,7 @@ def fig4_reduction_curve():
 
 
 def fig5_runtime_vs_length(strict_rows, loose_rows):
-    """Runtime vs achieved end length; color = tolerance, marker = depth.
-
-    (Only depths 3 and 4 occur in the sweep, so a continuous depth colorbar
-    would be misleading -- we encode depth with marker shape instead.)
-    """
+    """Runtime vs achieved end length; color = tolerance, marker = depth."""
     fig, ax = plt.subplots(figsize=(8.2, 4.8))
 
     style = [
@@ -504,7 +495,7 @@ def main():
     loose_rows = load_rows(LOOSE_CSV)
 
     fig1_motivation(strict_rows, loose_rows)
-    fig2_compute_graph_growth()
+    fig2_database_growth()
     fig3_gate_composition()
     fig4_reduction_curve()
     fig5_runtime_vs_length(strict_rows, loose_rows)

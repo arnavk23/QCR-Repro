@@ -1,27 +1,6 @@
 """Exact Clifford (tableau) engine for the ion-trap gate pool.
 
-Observation
------------
-The ion-trap pool used in Rosenhahn et al. (NJP 27, 104509, 2025) and in this
-repository consists of
-
-    RX(+/-pi/2), RY(+/-pi/2), RZ(+/-pi/2), RXX(pi/2)
-
-which are *all Clifford gates*.  Consequently every circuit drawn from that
-pool implements a Clifford unitary, and its action is fully captured by the
-binary symplectic (tableau) matrix of size 2n x 2n: two Clifford unitaries are
-equal up to global phase *iff* their tableaux coincide.
-
-This gives us:
-
-  * bit-exact, tolerance-free equivalence checking (no 1e-5 fuzz),
-  * O(n^2) per-gate exact simulation with integer arithmetic,
-  * a canonical algebraic object (the tableau) to reason about reductions.
-
-We deliberately track only the conjugation action (X-rows and Z-rows) and
-ignore global phases, matching the global-phase equivalence used everywhere
-else in the pipeline.
-"""
+The pool is all-Clifford, so binary symplectic tableaux capture circuits exactly up to global phase: bit-exact equivalence and O(n^2) integer simulation."""
 
 from __future__ import annotations
 
@@ -36,13 +15,7 @@ from .gates import circuit_unitary, gate_matrix
 class Tableau:
     """Binary symplectic tableau of an n-qubit Clifford circuit.
 
-    Rows 0..n-1   hold the images of the single-qubit Pauli X_i,
-    rows n..2n-1  hold the images of the single-qubit Pauli Z_i.
-
-    Each row is a pair of ints (xmask, zmask) of n bits.  Phases (signs of the
-    Pauli images) are intentionally dropped: we only care about unitaries up to
-    global phase, and the conjugation action is phase-free.
-    """
+Rows 0..n-1 hold images of X_i, rows n..2n-1 of Z_i, as (xmask, zmask) int pairs; phases are dropped (global-phase equivalence)."""
 
     __slots__ = ("n", "xrows", "zrows")
 

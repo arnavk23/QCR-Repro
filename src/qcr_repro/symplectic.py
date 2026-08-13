@@ -1,25 +1,6 @@
 """Exact phase-preserving symplectic (signed-tableau) engine for Clifford pools.
 
-For any Clifford gate set (every gate is a Clifford unitary, e.g. the ion-trap
-pool {RX, RY, RZ at +-pi/2, RXX(pi/2)} or the Clifford-NISQ pool {RX(+-pi/2),
-RZ(+-pi/2), CZ}), the unitary implemented by a circuit is, up to global phase,
-*fully* characterized by the conjugation action on the Pauli group:
-
-    U X_i U^dagger  and  U Z_i U^dagger   (i = 0 .. n-1).
-
-Two Cliffords are equal up to a global phase *iff* all 2n images coincide
-(if W = V^dagger U commutes with every X_i, Z_i then W = c I).
-
-Representation of an image: a signed Pauli, stored as a list of per-qubit
-factors (qubit, letter) with letter in {X, Y, Z} plus a complex coefficient in
-{1, -1, i, -i}.  Conjugation by a pool gate is applied factor-by-factor using
-precomputed maps (validated numerically at import time against direct matrix
-conjugation), and the product is canonicalized afterwards.  This yields:
-
-  * bit-exact, tolerance-free circuit equality checks (no 1e-5 fuzz),
-  * no floating point in the hot loop (the factor maps are exact),
-  * hashable keys that are invariant under global phase by construction.
-"""
+A Clifford unitary is captured up to global phase by its conjugation action on Paulis; images are signed per-qubit factors canonicalized after each gate. Bit-exact, tolerance-free, no floating point in the hot loop."""
 
 from __future__ import annotations
 
@@ -30,7 +11,7 @@ import numpy as np
 
 from .config import GateInstance
 from .gates import circuit_unitary, gate_matrix
-from .unitary_utils import equivalent_up_to_global_phase
+from .unitary import equivalent_up_to_global_phase
 
 # --------------------------------------------------------------------------- #
 # signed Pauli arithmetic
@@ -70,9 +51,7 @@ _MUL = _mul_table()
 def _canonicalize(factors: list[tuple[int, int]], coeff: complex) -> tuple[tuple[tuple[int, int], ...], complex]:
     """Combine per-qubit Pauli factors into canonical (letter-per-qubit) form.
 
-    ``factors`` is a list of (qubit, letter) tuples (order = product order).
-    Returns ((qubit, letter) pairs for non-identity qubits, coeff).
-    """
+Returns (non-identity (qubit, letter) pairs, coeff)."""
     n = max((q for q, _ in factors), default=-1) + 1
     # per-qubit current letter (0 = I) and accumulated coefficient
     cur = [0] * n
@@ -158,10 +137,7 @@ def _conjugation_map(name: str, theta: float | None) -> dict:
 class SignedTableau:
     """Phase-preserving tableau of an n-qubit Clifford unitary (up to global phase).
 
-    Rows 0..n-1 hold the images of X_i, rows n..2n-1 the images of Z_i.
-    A row is ``(factors, coeff)`` where ``factors`` is a canonical tuple of
-    (qubit, letter) pairs and ``coeff`` in {1, -1, i, -i}.
-    """
+Rows 0..n-1 hold images of X_i, rows n..2n-1 of Z_i; each row is (factors, coeff)."""
 
     __slots__ = ("n", "rows")
 

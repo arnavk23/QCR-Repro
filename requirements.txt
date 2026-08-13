@@ -1,9 +1,0 @@
-# Core dependencies (used by src/qcr_repro and the benchmark scripts)
-numpy>=1.26
-matplotlib>=3.9
-
-# Optional: only needed by scripts that compare against external compilers
-# (benchmark_comparison.py, future_work_baselines.py, generate_paper_pack.py)
-# and wrapped in try/except there.
-qiskit>=1.2
-bqskit>=1.1

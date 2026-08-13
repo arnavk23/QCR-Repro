@@ -4,7 +4,7 @@ import random
 from dataclasses import dataclass
 
 from .config import GateInstance, GateSetName, gateset_for
-from .tokenizer import TokenPool
+from .token_pool import TokenPool
 
 
 def build_pool(
@@ -35,13 +35,10 @@ def random_circuit(
     seed: int = 0,
     weights: dict[str, float] | None = None,
 ) -> tuple[list[GateInstance], TokenPool]:
-    """Random circuit drawn i.i.d. from the gate pool.
+    """    Random circuit drawn i.i.d. from the gate pool.
 
-    ``weights`` optionally overrides the sampling weight per gate name (default
-    1.0 for every pool gate).  The NISQ inputs in Rosenhahn et al. (Table 7)
-    exhibit RX:RZ:CZ ~ 108:109:82, which is exactly what a pool with CZ
-    weighted twice as strongly as the single-qubit gates produces; the ion-trap
-    inputs (Table 6) match uniform weights.
+    ``weights`` optionally overrides the per-gate sampling weight (default 1.0);
+    a doubled CZ weight matches the paper's Table 7 input composition.
     """
     pool = build_pool(num_qubits, gate_set, angles, two_qubit_angles)
     rng = random.Random(seed)

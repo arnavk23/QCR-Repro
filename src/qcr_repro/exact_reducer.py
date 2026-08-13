@@ -1,19 +1,6 @@
 """Exact, cost-aware circuit reduction for Clifford gate pools.
 
-This reducer drives the :class:`~qcr_repro.exact_graph.SymplecticDatabase` the
-same way :func:`qcr_repro.reducer.reduce_circuit` drives the numeric database,
-but with three differences that constitute the original contribution of this
-work:
-
-1. **Exact node identity.**  Lookups are keyed by the signed symplectic tableau
-   (integer arithmetic, bit-exact), so a replacement is equivalent up to global
-   phase *by construction*; no 1e-5 tolerance is involved anywhere.
-2. **Cost-aware objective.**  Every lookup minimizes ``(two-qubit count,
-   length)`` among the stored Pareto factorizations, directly implementing the
-   decoherence-cost objective deferred to future work in Rosenhahn et al.
-3. **Exact verification.**  The final circuit is verified against the input by
-   exact tableau equality (not a numeric tolerance check).
-"""
+Drives SymplecticDatabase with exact tableau identity, a (two-qubit, length) cost objective, and exact verification -- no numeric tolerance anywhere."""
 
 from __future__ import annotations
 
@@ -22,7 +9,7 @@ import time
 from dataclasses import dataclass
 
 from .config import GateInstance
-from .exact_graph import SymplecticDatabase
+from .exact_database import SymplecticDatabase
 from .reducer import (
     _gate_key,
     cluster_single_qubit,
@@ -77,14 +64,9 @@ def _cost_weighted_reduction(
     db: SymplecticDatabase,
     prefer: dict[str, float] | None = None,
 ) -> tuple[list[GateInstance], float | None]:
-    """Reduce a block by minimizing (two-qubit count, length, cost).
+    """Reduce a block minimizing (two-qubit count, length, weighted cost).
 
-    The cost term is a linear combination of hardware-cost weights via ``prefer``.
-    Lower is better.
-
-    Returns (reduced_block, cost) where cost is the weighted sum of gates
-    in the candidate (None if no improvement).
-    """
+Returns (reduced_block, cost) or (None, None) if no improvement."""
     # Get the SymplecticGraph for this block
     graph = db._graph_for(block)
     if graph is None:
@@ -218,9 +200,7 @@ def _random_escape_cost(
 ) -> int:
     """Escape: resample irreducible windows with structurally different words.
 
-    Tries ``num_tries`` random windows and accepts any candidate that
-    reduces (two-qubit count, length) under the hardware-cost model.
-    """
+Tries num_tries random windows, accepting any candidate that reduces (two-qubit, length) under the hardware-cost model."""
     n = len(gates)
     count = 0
 
@@ -265,13 +245,7 @@ def reduce_circuit_exact(
 ) -> tuple[list[GateInstance], ExactStats]:
     """Strong exact reducer: cluster + collapse + cost-aware sweep + transport.
 
-    ``cost_aware=True`` minimizes (two-qubit count, length); otherwise length
-    is minimized (matching the paper's objective).  Returns the reduced circuit
-    and statistics.  Equivalence with the input is bit-exact up to global phase.
-
-    The ``prefer`` dictionary maps gate names to a cost weight.  Lower weights
-    make the gate more preferable (e.g. ``{"RX": 0.01, "CZ": 5.0}``).
-    """
+cost_aware=True minimizes (two-qubit count, length); prefer maps gate names to cost weights (lower = more preferred). Equivalence is bit-exact up to global phase."""
     rng = random.Random(seed)
     working = list(gates)
     best = list(gates)

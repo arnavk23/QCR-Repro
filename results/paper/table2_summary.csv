@@ -1,4 +1,0 @@
-method,n,mean_len,mean_time_s,std_time_s
-V1-RS (ours),5,32.4,12.0,0.0
-V2-DR (ours),15,52,0.33,0.13
-exact (ours),15,28.67,12.01,0.01

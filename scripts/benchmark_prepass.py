@@ -1,28 +1,9 @@
-"""Head-to-head benchmark: pre-passes + batched sweep vs the baseline reducer
-and the paper's reported numbers (Rosenhahn, Osborne & Hirche, NJP 27 104509).
+"""Benchmark: pre-passes + batched sweep vs the baseline reducer and the paper's reported numbers.
 
-Compares three pipelines on identical random circuits (ion-trap pool, Table 6
-style: 4 qubits, length 300) under a fixed per-circuit time budget:
-
-    baseline        -- reduce_circuit with the scalar sweep (status quo)
-    prepass         -- + algebraic / ZX pre-passes before the DB loop
-    prepass_batched -- + vectorized batched sweep (bit-identical to scalar)
-
-For every circuit we record: input length, gates removed by the pre-passes,
-final length and per-type counts, runtime, and an exactness check (input vs
-output unitary up to global phase, 1e-5).  Aggregates are compared against the
-paper's "Ours" (Table 6: total 111, RXX 43) and the paper's reported V1/V2/V3
-computation times (Table 2, quoted as reported -- different hardware, so the
-comparison is contextual).
-
-Writes results/prepass/comparison_prepass_report.{md,csv,json}.
+Compares baseline / prepass / prepass_batched pipelines on identical random ion-trap circuits (Table 6 style) under a fixed time budget, with per-circuit exactness checks. Writes results/prepass/comparison_prepass_report.{md,csv,json}.
 
 Usage:
-    PYTHONPATH=src python scripts/benchmark_prepass.py [--num-circuits N]
-                                                       [--budget SEC]
-                                                       [--length L]
-                                                       [--gateset ion_trap|nisq]
-"""
+    PYTHONPATH=src python scripts/benchmark_prepass.py [--num-circuits N] [--budget SEC] [--length L] [--gateset ion_trap|nisq]"""
 
 from __future__ import annotations
 
@@ -34,11 +15,11 @@ import time
 from pathlib import Path
 
 from qcr_repro.circuits import count_gates, random_circuit
-from qcr_repro.compute_graph import load_or_build_database
+from qcr_repro.database import load_or_build_database
 from qcr_repro.gates import circuit_unitary
 from qcr_repro.prepass import apply_prepass
 from qcr_repro.reducer import reduce_circuit
-from qcr_repro.unitary_utils import equivalent_up_to_global_phase
+from qcr_repro.unitary import equivalent_up_to_global_phase
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "results" / "prepass"
@@ -194,7 +175,7 @@ def main() -> None:
 
     md.append("## Batched sweep vs scalar sweep (sweep-only microbenchmark)\n")
     md.append("- The vectorized batched sweep is bit-identical to the scalar sweep "
-              "(verified in scripts/check_batched_matches_scalar.py) and measures "
+              "(verified in scripts/check_batched_vs_scalar.py) and measures "
               "~1.5-1.7x faster on the length-300 ion-trap fixpoint in our microbenchmark; "
               "the remaining per-window cost is the SHA-256 digest.")
 

@@ -4,11 +4,11 @@ import random
 import time
 from dataclasses import dataclass
 
-from .compute_graph import ReductionDatabase
+from .database import ReductionDatabase
 from .config import GateInstance, gateset_for
 from .gates import circuit_unitary, embedded_gate_matrix
-from .tokenizer import TokenPool
-from .unitary_utils import equivalent_up_to_global_phase
+from .token_pool import TokenPool
+from .unitary import equivalent_up_to_global_phase
 
 
 def _snap_input_gates(gates: list[GateInstance], db: ReductionDatabase) -> list[GateInstance]:
@@ -104,10 +104,7 @@ def _sweep_reduce_cost(
 ) -> int:
     """Exhaustive sweep minimizing (two-qubit count, length) per window.
 
-    Uses :meth:`ReductionDatabase.try_reduce_cost` so each replacement prefers
-    a factorization with fewer two-qubit gates (hardware decoherence cost)
-    among the strictly shorter candidates.  Returns the number of replacements.
-    """
+Uses ReductionDatabase.try_reduce_cost; returns replacements applied."""
     total = 0
     while True:
         count = 0
@@ -139,9 +136,7 @@ def _sweep_reduce_cost(
 def sweep(gates: list[GateInstance], num_qubits: int, db: ReductionDatabase, max_len: int = 8) -> int:
     """Left-to-right exhaustive sweep over every window until no reduction found.
 
-    Greedy longest-first within each window start; returns the number of
-    replacements applied.
-    """
+Greedy longest-first within each window start; returns replacements applied."""
     total = 0
     while True:
         count = 0
@@ -264,34 +259,36 @@ def transport_shuffle(
             gates.insert(j, gate)
 
 
-def rz_global_pass(gates: list[GateInstance], one_wire_graph) -> int:
-    """NISQ-specific structural pass: transport RZ gates across CZ layers.
+def rz_global_pass(gates: list[GateInstance], one_wire_graph, max_iters: int = 8) -> int:
+    """NISQ structural pass: transport RZ gates across CZ layers.
 
-    RZ commutes with CZ (both diagonal) and with RZ on any wire, so every RZ
-    gate may be moved freely across CZ gates and across single-qubit gates on
-    other wires; the only obstruction on a wire is an RX on that same wire.
-    This pass performs a stable partition per wire: within each maximal region
-    delimited by RX_w barriers, all RZ_w gates are gathered together, forming
-    per-wire RZ runs which then collapse exactly.  Returns replacements.
-    """
-    num_wires = max(q for gate in gates for q in gate.qubits) + 1
-    result = list(gates)
-    for w in range(num_wires):
-        out: list[GateInstance] = []
-        pending: list[GateInstance] = []
-        for gate in result:
-            if gate.name == "RZ" and gate.qubits[0] == w:
-                pending.append(gate)
-            elif gate.name == "RX" and gate.qubits[0] == w:
-                out.extend(pending)
-                pending = []
-                out.append(gate)
-            else:
-                out.append(gate)
-        out.extend(pending)
-        result = out
-    gates[:] = result
-    return reduce_single_wire_runs(gates, one_wire_graph)
+Stable-partitions RZ per wire between RX barriers, collapses the runs, and iterates to a fixpoint; returns replacements."""
+    total = 0
+    for _ in range(max_iters):
+        if not gates:
+            break
+        num_wires = max(q for gate in gates for q in gate.qubits) + 1
+        result = list(gates)
+        for w in range(num_wires):
+            out: list[GateInstance] = []
+            pending: list[GateInstance] = []
+            for gate in result:
+                if gate.name == "RZ" and gate.qubits[0] == w:
+                    pending.append(gate)
+                elif gate.name == "RX" and gate.qubits[0] == w:
+                    out.extend(pending)
+                    pending = []
+                    out.append(gate)
+                else:
+                    out.append(gate)
+            out.extend(pending)
+            result = out
+        gates[:] = result
+        collapsed = reduce_single_wire_runs(gates, one_wire_graph)
+        total += collapsed
+        if collapsed == 0:
+            break
+    return total
 
 
 def _random_escape(
@@ -330,10 +327,7 @@ def reduce_with_database(
 ) -> tuple[list[GateInstance], ReductionStats]:
     """Local-term-replacement reducer driven by exhaustive sweeps.
 
-    Combines commutative shuffling (global sampling) with exhaustive local
-    sweeps over all windows up to ``max_block_len`` (local optimization) using the
-    precomputed ReductionDatabase.
-    """
+Combines commutative shuffling with exhaustive local sweeps over windows up to max_block_len against the precomputed ReductionDatabase."""
     rng = random.Random(seed)
     working = _snap_input_gates(gates, db)
     commute_cache: dict = {}
@@ -385,16 +379,10 @@ def reduce_with_lookup(
     iterations: int = 15000,
     seed: int = 0,
 ) -> tuple[list[GateInstance], ReductionStats]:
-    """Paper-style V2 reducer (MATLAB-demo port), rebuilt on current machinery.
+    """Paper-style V2 reducer (random block sampling against a wire-count database).
 
-    Runs ``iterations`` random block-sampling steps against a wire-count
-    database of the ion-trap pool at the given graph depth, replacing sampled
-    blocks whenever the database yields a strictly shorter equivalent word.
-    This is the iteration-budgeted analogue of :func:`reduce_random_sampling`
-    and keeps the historical ``reduce_with_lookup`` interface used by the
-    paper-protocol benchmark and demo-port scripts.
-    """
-    from .compute_graph import load_or_build_database
+Iteration-budgeted analogue of reduce_random_sampling, kept for the protocol benchmark and demo-port scripts."""
+    from .database import load_or_build_database
 
     if local_qubits < 2:
         raise ValueError("local_qubits must be >= 2")
@@ -475,6 +463,26 @@ def reduce_random_sampling(
     return working, stats
 
 
+def reduce_random_sampling_gated(
+    gates: list[GateInstance],
+    num_qubits: int,
+    db: ReductionDatabase,
+    budget_sec: float = 5.0,
+    seed: int = 0,
+    max_block_len: int = 7,
+) -> tuple[list[GateInstance], ReductionStats, "RfGate"]:
+    """Paper V3: random sampling with an RF-gated database lookup.
+
+Wraps db in RfGatedDatabase so blocks predicted irreducible skip the lookup (exact memo cache + lazily-trained classifier). Returns (reduced, stats, gate)."""
+    from .rf_gate import RfGate, RfGatedDatabase
+
+    gate = RfGate()
+    reduced, stats = reduce_random_sampling(
+        gates, num_qubits, RfGatedDatabase(db, gate), budget_sec, seed, max_block_len
+    )
+    return reduced, stats, gate
+
+
 def reduce_circuit(
     gates: list[GateInstance],
     num_qubits: int,
@@ -491,23 +499,9 @@ def reduce_circuit(
     zx: bool = False,
     use_batched: bool = False,
 ) -> tuple[list[GateInstance], int, int]:
-    """Strong reducer: cluster + collapse + sweep, transport shuffle, and escape.
+    """Strong reducer: cluster + collapse + sweep, transport shuffle, escape.
 
-    The escape move resamples an irreducible window with a structurally
-    different (possibly longer) equivalent word from the compute graph's cycle
-    structure, then re-sweeps; the change is kept only if it does not worsen
-    the circuit.  ``rz_pass`` enables the NISQ-specific RZ-across-CZ transport
-    pass.  ``cost_aware=True`` minimizes (two-qubit count, length) per window
-    replacement instead of length alone (matches the exact engine's objective).
-
-    ``algebraic`` / ``zx`` enable the cheap pre-passes (qcr_repro.prepass) that
-    shrink the input *before* the database loop using exact rotation-fusion and
-    ZX-cancellation rules (fused angles are always pool-representable).
-    ``use_batched`` swaps the per-window scalar sweep for the vectorized batched
-    sweep (qcr_repro.batched), which is bit-identical in results (see
-    scripts/check_batched_matches_scalar.py).
-    Returns (reduced, passes, replacements).
-    """
+Options: rz_pass (NISQ RZ-across-CZ), cost_aware ((twq, len) objective), algebraic/zx pre-passes, use_batched vectorized sweep. Returns (reduced, passes, replacements)."""
     rng = random.Random(seed)
     working = list(gates)
     if algebraic or zx:
@@ -525,10 +519,7 @@ def reduce_circuit(
     one_wire = db.graphs.get(1)
 
     def sweep_fn(gates_list, num_qubits_, db_, max_block_len_) -> int:
-        """Cost-aware mode pushes both the (twq, len) and the pure-length
-        objective on every pass; length-only mode matches the paper's metric.
-        Batched mode (length objective only) is bit-identical to the scalar
-        sweep (see scripts/check_batched_matches_scalar.py)."""
+        """Picks the sweep objective per mode: (twq, len) when cost_aware, length otherwise; batched mode is bit-identical to scalar."""
         if cost_aware:
             return _sweep_reduce_cost(gates_list, num_qubits_, db_, max_block_len_) + _sweep_reduce(
                 gates_list, num_qubits_, db_, max_block_len_

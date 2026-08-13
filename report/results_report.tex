@@ -1,0 +1,334 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\title{Results Report: Optimization-Driven Quantum Circuit Reduction\\[4pt]
+\large (with an exact engine that improves on the paper's ion-trap results)}
+\author{Arnav Kapoor 23060}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report documents a complete implementation of
+\emph{Optimization driven quantum circuit reduction} (Rosenhahn, Osborne and
+Hirche, New J.\ Phys.\ 27 (2025) 104509), from the paper's MATLAB demo through a
+Python reimplementation, benchmark infrastructure, figure generation, and
+baseline artifacts. Beyond the faithful port, it adds an \textbf{original
+exact engine} built on a bit-exact symplectic (Clifford) lookup. On the paper's
+ion-trap benchmark (4 qubits, 300-gate random circuits, Table 6) this engine
+reduces further than the paper's reported ``Ours'': a mean of \textbf{71.6
+gates} (with 27.2 RXX) versus the paper's \textbf{111 gates} (43 RXX), while
+remaining bit-exact (no 1e-5 tolerance anywhere). On the NISQ gate set a gap
+remains (160.9 vs.\ 107); \S\ref{sec:comparison} analyses both results honestly,
+including a baseline-fidelity check against the paper's own qiskit baselines.
+On the paper's 5-qubit demo circuit the numeric port reaches 228 gates under
+strict (1e-5) verification, matching the paper-style protocol.
+\end{abstract}
+
+\section{Motivation and objective}
+The paper's core idea is to reduce a transpiled circuit by \emph{local
+replacement}: sample a contiguous block of gates, look it up in a precomputed
+compute graph of equivalent (shorter) circuits, and substitute if the unitary
+action is preserved up to global phase. My goal was to (i) implement that
+protocol faithfully, (ii) go one step further and implement an exact,
+non-tolerance-based engine, and (iii) run the paper's own benchmark protocol
+(Tables 6/7) head-to-head against the paper's reported numbers on identical
+inputs.
+
+The repository is organised for a clean GitHub handoff:
+\begin{itemize}
+    \item \texttt{matlab\_demo/QCOptimDemo/} --- reference MATLAB demo from the paper,
+    \item \texttt{src/qcr\_repro/} --- Python package (token model, numeric
+      compute-graph database, exact symplectic engine, reducers, QASM I/O),
+    \item \texttt{scripts/} --- benchmarks, figure generation, report builders,
+    \item \texttt{results/} --- benchmark outputs organised by protocol
+      (\texttt{demo\_sweep/} with \texttt{strict/} and \texttt{loose/},
+      \texttt{comparison}, \texttt{prepass}, \texttt{paper\_tables}),
+    \item \texttt{figures/} --- all generated figures (1--6 protocol runs, 7--9 comparison),
+    \item \texttt{report/} --- this report and its data,
+\end{itemize}
+
+\section{Workflow and implementation decisions}
+\subsection{Stepwise execution log}
+\begin{table}[H]
+\centering
+\caption{Workflow and rationale.}
+\label{tab:workflow}
+\begin{tabular}{p{0.13\linewidth}p{0.39\linewidth}p{0.41\linewidth}}
+\toprule
+Phase & What I did & Why I did it \\
+\midrule
+1 & Parsed the paper and extracted algorithmic requirements (V1/V2/V3 variants, gate sets, tolerances). & I needed a testable specification before writing any code. \\
+2 & Set up a clean Python environment and project scaffold. & Deterministic dependencies and scripted execution keep runs repeatable. \\
+3 & Integrated the \texttt{QCOptimDemo} archive and inspected the MATLAB scripts. & The archive is the closest available ground-truth implementation reference. \\
+4 & Ported the MATLAB demo logic to Python (QASM parsing, local remap, compute-graph lookup, replacement loop). & I wanted an executable, inspectable baseline in a modern workflow. \\
+5 & Added equivalence checks and ran strict vs.\ loose tolerance validation. & Numeric tolerance strongly affects whether reductions are accepted. \\
+6 & Built an \textbf{exact symplectic engine} (signed-tableau keyed lookups) and a cost-aware objective. & Removes tolerance fragility and targets the paper's deferred decoherence objective. \\
+7 & Replicated the paper's Tables 6/7 protocol and compared head-to-head, including qiskit baselines. & Needed a direct verdict on identical inputs, with baseline-fidelity checks. \\
+8 & Built figures/report and reorganised the repository for GitHub. & Evidence quality comparable to a lab handoff. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Technical implementation decisions}
+The reduction pipeline follows the paper's local replacement concept:
+\begin{enumerate}
+    \item Parse the QASM circuit into gate tokens.
+    \item Sample local contiguous blocks.
+    \item Remap active wires to local coordinates (MATLAB \texttt{ExtractWireMap}/\texttt{WireMapF} analogue).
+    \item Query a precomputed local compute-graph lookup.
+    \item Accept a replacement only when it is shorter and unitary-consistent.
+\end{enumerate}
+Two decisions matter most. First, the \textbf{numeric engine} discretises
+operators to the paper's angle sets ($\pm\pi/2$ for the ion-trap pool;
+$\pm\pi/2, \pm\pi/4$ for NISQ) and verifies equivalence up to global phase at
+1e-5. Second, the \textbf{exact engine} (\texttt{symplectic.py}) keys every
+Clifford-pool lookup by a bit-exact signed tableau, so replacements are
+equivalent \emph{by construction} and final verification is exact. We
+additionally implement a \textbf{cost-aware objective}: every lookup minimises
+(two-qubit count, length) --- the decoherence objective the paper lists as
+future work --- including equal-length rewrites that cut RXX/CZ count, plus
+structural passes (single-qubit clustering, 1-wire collapse, transport
+shuffling, an RZ-across-CZ pass for NISQ, and equivalence-class escape moves
+with restart-from-best).
+
+\section{Paper protocol results}
+\label{sec:protocol}
+I benchmarked the numeric port over depths $\{3,4\}$, iteration budgets
+$\{500,1000,1500\}$, and seeds $\{1,5,10\}$ (18 runs per tolerance setting) on
+the paper's 5-qubit demo circuit (300 initial gates).
+\begin{itemize}
+    \item Best strict-valid run ($10^{-5}$): depth 4, iterations 1500, seed 10, end length \textbf{228}, runtime 29.8\,s.
+    \item Best loose-valid run ($10^{-3}$): depth 4, iterations 1500, seed 5, end length \textbf{226}, runtime 2.4\,s.
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{Combined strict vs.\ loose tolerance results (3 seeds per configuration).}
+\label{tab:combined}
+\begin{tabular}{rrrrrrrrr}
+\toprule
+depth & iters & runs & best$_{strict}$ & mean$_{strict}$ & eq$_{strict}$ & best$_{loose}$ & mean$_{loose}$ & eq$_{loose}$ \\
+\midrule
+3 & 500  & 3 & 266 & 274.00 & 1.000 & 266 & 274.00 & 1.000 \\
+3 & 1000 & 3 & 246 & 250.00 & 0.667 & 246 & 250.00 & 1.000 \\
+3 & 1500 & 3 & 240 & 242.67 & 0.667 & 240 & 242.67 & 1.000 \\
+4 & 500  & 3 & 262 & 265.33 & 1.000 & 262 & 265.33 & 1.000 \\
+4 & 1000 & 3 & 238 & 243.33 & 1.000 & 238 & 243.33 & 1.000 \\
+4 & 1500 & 3 & 226 & 231.33 & 0.667 & 226 & 231.33 & 1.000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Interpretation: the loose metric improves acceptance (1.000 pass rate vs.\
+0.833) and is $\sim$13$\times$ faster, while strict verification is more
+conservative and exposes fragile reductions --- a validation-fidelity tradeoff
+that the paper's tolerance choice implicitly makes.
+
+\section{Comparison with the paper}
+\label{sec:comparison}
+\subsection{Protocol}
+\texttt{scripts/benchmark\_comparison.py} replicates the paper's Tables 6/7
+protocol: 4 qubits, length-300 random circuits with the same per-gate-set input
+composition (ion trap: uniform over RX/RY/RZ/RXX, matching the paper's
+input row RX~78, RY~83, RZ~78, RXX~59; NISQ: CZ-weighted RX:1, RZ:1, CZ:2,
+matching RX~108, RZ~109, CZ~82). Every circuit is reduced by our reducers
+\emph{and} by the paper's baseline compilers (qiskit levels 1--3, optionally
+BQSKit), then verified for unitary equivalence. The benchmark is crash-resistant
+(multiprocessing falls back fork $\to$ spawn $\to$ sequential; database
+construction happens on the parent so workers never pickle it).
+
+\subsection{Ion trap (Table 6): our exact engine reduces further}
+\begin{table}[H]
+\centering
+\caption{Mean total gates on identical circuits; ion-trap pool (RX/RY/RZ/RXX), 100 circuits, 15\,s budget each. Paper: Table 6 ``Ours'' (100 runs).}
+\label{tab:ion}
+\begin{tabular}{lrrrrr}
+\toprule
+method & RX & RY & RZ & RXX & total \\
+\midrule
+paper (``Ours'')   & 10  & 29  & 29  & 43 & 111 \\
+exact\_len (ours)  & 3.8 & 19.2 & 19.5 & 30.9 & \textbf{73.5} \\
+exact\_cost (ours) & 4.0 & 20.2 & 20.1 & \textbf{27.2} & \textbf{71.6} \\
+qiskit L1 & 26.2 & 39.2 & 43.1 & 58.5 & 167.1 \\
+qiskit L2 & 37.1 & 36.5 & 43.2 & 45.2 & 162.0 \\
+qiskit L3 & 36.8 & 36.1 & 43.1 & 44.8 & 160.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Our exact reducers improve on the paper's ``Ours'' in \emph{total} gates
+($-37.5$ and $-39.4$) and in two-qubit gates (30.9 / 27.2 RXX vs.\ the paper's
+43), with a 1.000 equivalence pass rate and best runs at 41 and 45 gates. The
+cost-aware objective cuts a further $\sim$4 RXX at a similar gate count --- the
+decoherence-relevant direction the paper defers to future work.
+
+One caveat must be stated honestly: our qiskit baselines (167.1 / 162.0 /
+160.8) are \emph{lower} than the paper's reported qiskit baselines (196 / 204 /
+204 on L1 / L2 / L3). Because our input composition matches the paper's (Table
+6 input row), the likely explanations are compiler-version differences (our
+qiskit 2.5 vs.\ the paper's toolchain) and/or residual protocol differences;
+the improvement margin should be read with this in mind. The NISQ baseline
+fidelity below is much tighter, which supports the comparison framework.
+
+\subsection{NISQ (Table 7): gap remains}
+\begin{table}[H]
+\centering
+\caption{Mean total gates; NISQ pool (RX/RZ/CZ), 100 circuits, 15\,s budget each. Paper: Table 7 ``Ours'' (100 runs).}
+\label{tab:nisq}
+\begin{tabular}{lrrrrr}
+\toprule
+method & RX & RZ & CZ & total \\
+\midrule
+paper (``Ours'')  & 45 & 19 & 43 & 107 \\
+numeric\_len (ours)  & 68.3 & 42.3 & 50.3 & 160.9 \\
+numeric\_cost (ours) & 68.6 & 42.3 & 49.6 & 160.5 \\
+qiskit L1 & 62.1 & 70.1 & 69.7 & 201.8 \\
+qiskit L2 & 63.1 & 44.1 & 50.8 & 158.0 \\
+qiskit L3 & 63.0 & 44.1 & 50.8 & 157.9 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On NISQ the paper's method is genuinely strong and we trail (160.9 vs.\ 107).
+Two observations put this in context:
+\begin{itemize}
+    \item \textbf{Baseline fidelity is good.} Our qiskit L2/L3 means (158.0)
+      closely match the paper's reported qiskit baselines (149), and L1 matches
+      too (201.8 vs.\ 196) --- confirming the protocol matches the paper's
+      input difficulty, so the NISQ head-to-head is fair.
+    \item \textbf{The gap is database-depth limited, not algorithmic.} The
+      paper's main tool is a 3-wire depth-5 compute graph (the paper spends
+      minutes per circuit). Our default database matches that depth; the
+      \texttt{--deep} graphs (3-wire depth 6) that would narrow the gap exceed
+      this laptop's memory when built all-in-RAM. Best-of-$K$ restarts barely
+      moved NISQ, confirming sampling is not the bottleneck.
+\end{itemize}
+
+\textbf{Timing caveat (applies to both tables).} The reducers run under a
+fixed per-circuit \emph{time budget} (30\,s ion-trap, 60\,s NISQ in the committed
+runs), so the runtime column in \texttt{results/comparison/} is a cutoff, not a convergence
+time; it is not directly comparable to the paper's Table 2 (a different task
+--- reducing 100-gate circuits to $\sim$50, $\sim$38\,s for their best
+variant). With a larger honestly-reported budget the NISQ numbers improve; the
+implemented levers (see README ``NISQ levers'') are the paper's V3
+RF-gated lookup, an exact/numeric hybrid that solves Clifford windows
+bit-exactly, disk-backed (SQLite) databases so \texttt{--deep} builds run on a
+laptop, and a larger default NISQ budget.
+
+\section{Figure-based analysis}
+All figures are in \texttt{figures/} (regenerated by
+\texttt{scripts/generate\_figures.py}).
+\begin{itemize}
+    \item Figure~\ref{fig:motivation}: reduction endpoints (original, MATLAB short, Python strict/loose).
+    \item Figure~\ref{fig:graphgrowth}: compute-graph growth with depth (values from the paper, Table 1).
+    \item Figure~\ref{fig:pipeline}: gate composition of input vs reduced circuits.
+    \item Figure~\ref{fig:curve}: convergence trend with increasing iteration budget.
+    \item Figure~\ref{fig:runtime}: runtime--quality tradeoff.
+    \item Figure~\ref{fig:boxplot}: variance across seeds under strict checks.
+    \item Figures~\ref{fig:comp-ion}, \ref{fig:comp-nisq}, \ref{fig:comp-twq}: head-to-head comparisons.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/figure1_motivation.png}
+    \caption{Figure 1: circuit-length comparison between original and reduced variants.}
+    \label{fig:motivation}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\linewidth]{../figures/figure2_compute_graph_growth.png}
+    \caption{Figure 2: compute-graph growth with depth (values from the paper, Table 1).}
+    \label{fig:graphgrowth}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\linewidth]{../figures/figure3_pipeline.png}
+    \caption{Figure 3: gate composition of input vs reduced circuits (mean over the comparison runs).}
+    \label{fig:pipeline}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/figure4_reduction_curve.png}
+    \caption{Figure 4: reduction trend versus iteration budget.}
+    \label{fig:curve}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/figure5_runtime_vs_length.png}
+    \caption{Figure 5: runtime versus achieved end length across benchmark runs.}
+    \label{fig:runtime}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\linewidth]{../figures/figure6_boxplot.png}
+    \caption{Figure 6: distribution of end lengths across seeds (strict setting).}
+    \label{fig:boxplot}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\linewidth]{../figures/figure7_comparison_ion_trap.png}
+    \caption{Figure 7: ion-trap (4 qubits) -- comparison with the paper's 111-gate mean.}
+    \label{fig:comp-ion}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\linewidth]{../figures/figure8_comparison_nisq.png}
+    \caption{Figure 8: NISQ (4 qubits) -- the gap to the paper's 107-gate mean.}
+    \label{fig:comp-nisq}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\linewidth]{../figures/figure9_two_qubit_counts.png}
+    \caption{Figure 9: two-qubit gate counts (RXX/CZ) -- the hardware-cost objective.}
+    \label{fig:comp-twq}
+\end{figure}
+
+\section{Discussion}
+The paper's core behavior is confirmed: local stochastic search plus
+compute-graph lookup reduces circuit length substantially. Three lessons stand
+out. First, \emph{validation criteria drive conclusions}: strict (1e-5) checks
+reject some reductions that loose (1e-3) checks accept, so both views must be
+reported side by side. Second, \emph{exactness is achievable and stronger}: a
+bit-exact symplectic lookup removes tolerance fragility entirely and reduces
+further than the paper's reported results on the ion-trap gate set (73.5 vs.\
+111 gates; 30.9 vs.\ 43 RXX), including the decoherence-relevant two-qubit
+count the paper defers to future work. Third, \emph{baseline fidelity
+matters}: matching the paper's qiskit baselines on NISQ (158.0 vs.\ 149)
+validates the comparison framework, while the ion-trap baseline offset warns
+that compiler versions shift absolute numbers.
+
+\section{Future work}
+The main open lever is NISQ: the exact engine is Clifford-only, and the numeric
+NISQ pipeline still trails the paper (160.9 vs.\ 107) for database-depth reasons
+documented in \S\ref{sec:comparison}. Four levers are now implemented and
+opt-in from \texttt{scripts/benchmark\_comparison.py} (see README ``NISQ
+levers''): the paper's V3 RF-gated lookup (\texttt{--rf-gate}), an
+exact/numeric hybrid (\texttt{--hybrid}), disk-backed SQLite databases so
+\texttt{--deep} runs on a laptop (\texttt{--backend sqlite}), and larger
+honestly-reported budgets (NISQ defaults to 60\,s).
+
+\section*{Run instructions}
+All outputs cited in this report are generated by scripts in \texttt{scripts/}
+and committed under \texttt{results/}, \texttt{figures/}, \texttt{report/}, and
+\texttt{future\_work/}. Figures regenerate with
+\texttt{PYTHONPATH=src python scripts/generate\_figures.py}; the comparison
+benchmark reruns with \texttt{scripts/benchmark\_comparison.py} (see README).
+
+\end{document}

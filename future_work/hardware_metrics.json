@@ -1,6 +1,0 @@
-{
-  "hardware_available": false,
-  "provider": "none",
-  "backend": "none",
-  "reason": "No authenticated hardware provider configured in this environment."
-}

@@ -1,47 +1,12 @@
 """Head-to-head comparison benchmark against the paper (NJP 27, 104509, 2025).
 
-Replicates the paper's statistical protocol (Tables 6/7): 100 random 4-qubit
-circuits of length 300, reduced under a fixed per-circuit time budget, for
-both hardware gate sets:
+Runs the paper's statistical protocol (Tables 6/7): 100 random 4-qubit length-300 circuits per gate set under a fixed per-circuit time budget, our reducers vs qiskit/BQSKit baselines, with WIN/LOSE verdicts against the paper's reported numbers.
 
-  * ion-trap pool  {RX, RY, RZ @ +/-pi/2, RXX @ pi/2}   (uniform sampling,
-    matching Table 6 input composition RX~78, RY~83, RZ~78, RXX~59)
-  * NISQ pool      {RX, RZ @ +/-pi/2, +/-pi/4, CZ}      (CZ-weighted sampling
-    weights RX:1, RZ:1, CZ:2, matching Table 7 input RX~108, RZ~109, CZ~82)
-
-Reducers compared (per gate set):
-
-  ion_trap:
-    exact_len    -- exact symplectic engine, length objective (paper's metric)
-    exact_cost   -- exact symplectic engine, (two-qubit, length) objective
-    numeric_len  -- numeric DB engine, length objective (requires --numeric)
-  nisq:
-    numeric_len  -- numeric DB engine + RZ-across-CZ pass, length objective
-    numeric_cost -- numeric DB engine + RZ-across-CZ pass, cost-aware objective
-
-Baseline compilers (paper's Q-L1..3 and B-L2..4, same circuits):
-
-    qiskit_l1/l2/l3  -- qiskit transpile to the target basis (Q-L1..Q-L3)
-    bqskit_l2/l3/l4  -- BQSKit compile with optimization levels 2..4 (B-L2..B-L4)
-
-The report compares every method head-to-head against the paper's numbers and
-prints a WIN/LOSE verdict per row, plus a baseline-fidelity check (our qiskit/
-BQSKit means vs the paper's reported baseline means).
-
-Databases are built/loaded in the parent process before workers start (single
-build; forked workers share them via copy-on-write).  If qiskit or bqskit are
-not installed the corresponding baseline columns are skipped with a note.
-
-Benchmarks are NOT run by this tool's authoring session -- run this script
-yourself, e.g.:
-
+Usage:
     PYTHONPATH=src python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 100 --budget 30
-    PYTHONPATH=src python scripts/benchmark_comparison.py --gateset nisq --num-circuits 100 --budget 30
-    PYTHONPATH=src python scripts/benchmark_comparison.py --gateset nisq --deep    # deeper DBs
-    PYTHONPATH=src python scripts/benchmark_comparison.py --gateset nisq --no-baselines
+    PYTHONPATH=src python scripts/benchmark_comparison.py --gateset nisq --budget 60 [--deep] [--hybrid] [--rf-gate] [--no-baselines]
 
-Results (CSV + markdown + JSON comparison report) are written to --outdir.
-"""
+Results (CSV + markdown + JSON) are written to --outdir."""
 
 from __future__ import annotations
 
@@ -55,12 +20,14 @@ import time
 from pathlib import Path
 
 from qcr_repro.circuits import count_gates, random_circuit
-from qcr_repro.compute_graph import load_or_build_database
-from qcr_repro.exact_graph import load_or_build_exact
+from qcr_repro.database import load_or_build_database
+from qcr_repro.exact_database import load_or_build_exact
 from qcr_repro.exact_reducer import reduce_circuit_exact, verify_exact
 from qcr_repro.gates import circuit_unitary
+from qcr_repro.hybrid import HybridDatabase
 from qcr_repro.reducer import reduce_circuit
-from qcr_repro.unitary_utils import equivalent_up_to_global_phase
+from qcr_repro.rf_gate import RfGate, RfGatedDatabase
+from qcr_repro.unitary import equivalent_up_to_global_phase
 
 # --------------------------------------------------------------------------- #
 # configuration
@@ -75,7 +42,12 @@ NISQ_DEPTHS_DEFAULT = {1: 12, 2: 6, 3: 5, 4: 4}
 NISQ_DEPTHS_CACHED = {1: 12, 2: 5, 3: 4, 4: 4}  # reuse the pre-built pickle only
 NISQ_DEPTHS_DEEP = {1: 14, 2: 8, 3: 6, 4: 4}  # slower builds, more reductions
 
-# Sampling weights reproducing the paper's input compositions.
+# Depths for the exact Clifford sub-pool graphs used by --hybrid.  The
+# Clifford sub-pool {RX, RZ @ +/-pi/2, CZ} is far smaller than the full NISQ
+# pool, so its graphs can go deeper at a fraction of the build cost.
+HYBRID_EXACT_DEPTHS = {1: 12, 2: 8, 3: 6, 4: 5}
+
+# Sampling weights matching the paper's input compositions.
 ION_WEIGHTS = None  # uniform over the 30-token pool -> Table 6 input row
 NISQ_WEIGHTS = {"RX": 1.0, "RZ": 1.0, "CZ": 2.0}  # -> Table 7 input row
 
@@ -237,15 +209,15 @@ def _bqskit_compile(gates, num_qubits: int, gateset: str, level: int):
 _DB_CACHE: dict = {}
 
 
-def _load_db(kind: str, gateset: str, depths: dict[int, int]):
-    key = (kind, gateset, tuple(sorted(depths.items())))
+def _load_db(kind: str, gateset: str, depths: dict[int, int], backend: str = "ram"):
+    key = (kind, gateset, tuple(sorted(depths.items())), backend)
     cached = _DB_CACHE.get(key)
     if cached is not None:
         return cached
     if kind == "exact":
         db = load_or_build_exact(gateset, depths)
     else:
-        db = load_or_build_database(gateset, depths)
+        db = load_or_build_database(gateset, depths, backend=backend)
     _DB_CACHE[key] = db
     return db
 
@@ -255,7 +227,8 @@ def _count_twq(gates) -> int:
 
 
 def _worker(args):
-    (gateset, method, num_qubits, length, budget_s, seed, weights, rz_pass, depths, max_block_len, restarts) = args
+    (gateset, method, num_qubits, length, budget_s, seed, weights, rz_pass, depths,
+     max_block_len, restarts, backend, rf_gate, hybrid) = args
     gates, _ = random_circuit(num_qubits, length, gateset, seed=seed, weights=weights)
     if method.startswith("qiskit_"):
         res = _qiskit_transpile(gates, num_qubits, gateset, int(method[-1]))
@@ -295,7 +268,20 @@ def _worker(args):
         verifier = "exact"
         secs = stats.runtime_sec  # excludes DB load, like the numeric path below
     else:
-        db = _load_db("numeric", gateset, depths)
+        # SQLite-backed databases are re-opened in each worker (forked
+        # processes must not share a parent's SQLite connection).
+        if backend == "sqlite":
+            db = load_or_build_database(gateset, depths, backend="sqlite")
+        else:
+            db = _load_db("numeric", gateset, depths, "ram")
+        if hybrid:
+            if gateset != "nisq":
+                raise ValueError("--hybrid is implemented for the NISQ pool only")
+            exact_clifford = _load_db("exact", "nisq_clifford", HYBRID_EXACT_DEPTHS)
+            numeric_gate = RfGate() if rf_gate else None
+            db = HybridDatabase(db, exact_clifford, numeric_gate=numeric_gate)
+        elif rf_gate:
+            db = RfGatedDatabase(db, RfGate())
         t0 = time.time()
         best_r = None
         best_key = None
@@ -486,8 +472,27 @@ def _build_report(gateset: str, results: list[dict], stats: dict, meta: dict) ->
         lines += [
             "",
             "Note: NISQ inputs are CZ-weighted (weights RX:1, RZ:1, CZ:2) to match the paper's",
-            "Table 7 input composition (RX~108, RZ~109, CZ~82). The RZ-across-CZ pass is enabled.",
+            "Table 7 input composition (RX~108, RZ~109, CZ~82). The RZ-across-CZ pass is enabled",
+            "(iterated to a fixpoint).",
         ]
+        if meta.get("hybrid"):
+            lines += [
+                "Exact/numeric hybrid enabled: Clifford-only windows (RX/RZ at +/-pi/2, CZ) are",
+                "reduced by the exact symplectic engine at deep graph depths; only non-Clifford",
+                "(pi/4) windows hit the numeric database.",
+            ]
+        if meta.get("rf_gate"):
+            lines += [
+                "V3-style RF-gated lookup enabled: an online classifier skips lookups on blocks",
+                "predicted irreducible, freeing budget for blocks that actually reduce.",
+            ]
+    lines += [
+        "",
+        "Timing caveat: the \"time (s)\" column is the per-circuit budget cap -- each reducer",
+        "loops until its budget is exhausted. It is a cutoff, not a convergence time, and is",
+        "not directly comparable to the paper's Table 2 (a different task: reducing 100-gate",
+        "circuits to ~50, ~38 s for their best variant).",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -497,13 +502,20 @@ def main() -> None:
     parser.add_argument("--num-circuits", type=int, default=None, help="circuits per method (default 100, or 8 with --quick)")
     parser.add_argument("--num-qubits", type=int, default=4)
     parser.add_argument("--length", type=int, default=300)
-    parser.add_argument("--budget", type=float, default=None, help="per-circuit time budget (s, default 30, or 10 with --quick)")
+    parser.add_argument("--budget", type=float, default=None,
+                        help="per-circuit time budget (s, default 30 ion_trap / 60 nisq, or 10 with --quick)")
     parser.add_argument("--seed-base", type=int, default=0)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--rz-pass", action="store_true", help="RZ-across-CZ pass (always on for nisq)")
     parser.add_argument("--numeric", action="store_true", help="also run numeric reducer for ion_trap")
     parser.add_argument("--depths", type=str, default="", help='override DB depths, e.g. "1:12,2:8,3:5,4:4"')
     parser.add_argument("--deep", action="store_true", help="use deeper NISQ graphs (slower build, more reductions)")
+    parser.add_argument("--backend", type=str, default=None, choices=["ram", "sqlite"],
+                        help="lookup DB storage backend (default: ram; --deep implies sqlite, which builds the\n                        deep graphs within a laptop's memory)")
+    parser.add_argument("--rf-gate", action="store_true",
+                        help="V3-style RandomForest-gated lookup: learn which blocks reduce and skip\n                        useless DB lookups (needs optional extra [ml])")
+    parser.add_argument("--hybrid", action="store_true",
+                        help="NISQ: solve Clifford-only windows (RX/RZ at +/-pi/2, CZ) with the exact\n                        symplectic engine; only non-Clifford (pi/4) windows hit the numeric DB")
     parser.add_argument("--block-len", type=int, default=None, help="max sweep window length (default 8, or 10 for nisq/--deep)")
     parser.add_argument("--no-baselines", action="store_true", help="skip qiskit/BQSKit baseline compilers")
     parser.add_argument("--baselines-only", action="store_true", help="run only the qiskit/BQSKit baselines (no reducers, no DB build)")
@@ -522,10 +534,17 @@ def main() -> None:
         args.budget = args.budget or 10.0
     else:
         args.num_circuits = args.num_circuits or 100
-        args.budget = args.budget or 30.0
+        # NISQ's search space is much larger than ion trap's, so it gets a
+        # larger honestly-reported default budget (the paper admits their
+        # approach "takes much longer (up to several minutes)" per circuit).
+        args.budget = args.budget or (60.0 if args.gateset == "nisq" else 30.0)
 
     weights = ION_WEIGHTS if args.gateset == "ion_trap" else NISQ_WEIGHTS
     rz_pass = args.rz_pass or args.gateset == "nisq"
+
+    backend = args.backend or ("sqlite" if args.deep else "ram")
+    if args.hybrid and args.gateset != "nisq":
+        parser.error("--hybrid is implemented for the NISQ pool only")
 
     depths = _depths_for(args.gateset, "deep" if args.deep else "default")
     if args.depths:
@@ -542,8 +561,9 @@ def main() -> None:
         mode = "deep" if args.deep else "default"
         print(
             f"[note] NISQ {mode} depths {depths}: the 1/2/3-wire graphs will be rebuilt once and "
-            "cached (.cache/). Use --depths 1:12,2:5,3:4,4:4 to reuse the pre-built database. "
-            "(--deep graphs build more slowly but reduce more.)",
+            f"cached (.cache/, backend {backend}). Use --depths 1:12,2:5,3:4,4:4 to reuse the "
+            "pre-built database. (--deep implies the sqlite backend so the deep graphs build "
+            "within a laptop's memory; they build more slowly but reduce more.)",
             flush=True,
         )
 
@@ -562,9 +582,14 @@ def main() -> None:
     for kind in ("exact", "numeric"):
         if any(m.startswith(kind) for m in ours_methods):
             t0 = time.time()
-            _load_db(kind, args.gateset, depths)
-            print(f"[{args.gateset}] {kind} database ready ({time.time() - t0:.1f}s, depths {depths})",
-                  flush=True)
+            _load_db(kind, args.gateset, depths, backend)
+            print(f"[{args.gateset}] {kind} database ready ({time.time() - t0:.1f}s, "
+                  f"depths {depths}, backend {backend})", flush=True)
+    if args.hybrid:
+        t0 = time.time()
+        _load_db("exact", "nisq_clifford", HYBRID_EXACT_DEPTHS)
+        print(f"[nisq] hybrid exact (Clifford sub-pool) database ready ({time.time() - t0:.1f}s)",
+              flush=True)
 
     # --- availability probes for baselines (fresh interpreter: importing
     # qiskit/BQSKit in the parent would poison the fork used by the worker
@@ -583,7 +608,8 @@ def main() -> None:
             if m.startswith("bqskit_") and s - args.seed_base >= bqskit_max:
                 continue
             tasks.append((args.gateset, m, args.num_qubits, args.length, args.budget, s,
-                          weights, rz_pass, depths, max_block_len, max(1, args.restarts)))
+                          weights, rz_pass, depths, max_block_len, max(1, args.restarts),
+                          backend, args.rf_gate, args.hybrid))
 
     print(
         f"[{args.gateset}] {args.num_circuits} circuits x {args.length} gates (q{args.num_qubits}), "
@@ -620,6 +646,9 @@ def main() -> None:
         "rz_pass": rz_pass,
         "weights": weights,
         "restarts": max(1, args.restarts),
+        "backend": backend,
+        "rf_gate": args.rf_gate,
+        "hybrid": args.hybrid,
         "date": time.strftime("%Y-%m-%d %H:%M:%S"),
         "wall_sec": round(wall, 1),
         "with_numeric": args.numeric,

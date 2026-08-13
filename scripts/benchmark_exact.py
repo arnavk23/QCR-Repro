@@ -22,12 +22,12 @@ import time
 from pathlib import Path
 
 from qcr_repro.circuits import count_gates, random_circuit
-from qcr_repro.compute_graph import load_or_build_database
-from qcr_repro.exact_graph import load_or_build_exact
+from qcr_repro.database import load_or_build_database
+from qcr_repro.exact_database import load_or_build_exact
 from qcr_repro.gates import circuit_unitary
 from qcr_repro.reducer import reduce_circuit
 from qcr_repro.exact_reducer import reduce_circuit_exact, verify_exact
-from qcr_repro.unitary_utils import equivalent_up_to_global_phase
+from qcr_repro.unitary import equivalent_up_to_global_phase
 
 ION_DEPTHS = {1: 12, 2: 10, 3: 7, 4: 5}
 NISQ_DEPTHS = {1: 12, 2: 6, 3: 6, 4: 4}
@@ -82,7 +82,7 @@ def main() -> None:
     parser.add_argument("--rz-pass", action="store_true")
     parser.add_argument("--methods", type=str, default="numeric,exact_len,exact_cost")
     parser.add_argument("--workers", type=int, default=None)
-    parser.add_argument("--outdir", type=str, default="results/costaware_quick")
+    parser.add_argument("--outdir", type=str, default="results/exact_quick")
     args = parser.parse_args()
 
     weights = None
