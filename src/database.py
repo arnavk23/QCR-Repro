@@ -36,7 +36,9 @@ _MISSING = object()
 class SqliteDict:
     """Dict-like view over a SQLite table (BLOB key -> pickled BLOB value).
 
-Buffered batched writes in transactions and a bounded LRU read cache; preserves value identity so callers may mutate and re-assign. Backs buckets/alts when backend="sqlite", trading build RAM for disk."""
+    Batched writes in transactions and a bounded LRU read cache; preserves
+    value identity so callers may mutate and re-assign.  Backs buckets/alts
+    when backend="sqlite", trading build RAM for disk."""
 
     def __init__(
         self,
@@ -132,7 +134,9 @@ The buffer is cleared only after commit, so a failed write never drops entries."
 class ComputeGraph:
     """Exhaustive compute graph over a token pool up to max_depth.
 
-Nodes are phase-normalized unitaries keyed by SHA-256 digests; edges are pool gates; each node stores the shortest pool-token chain (BFS). With backend="sqlite" the tables live in a SQLite file instead of RAM."""
+    Nodes are phase-normalized unitaries keyed by SHA-256 digests; edges are
+    pool gates; each node stores the shortest pool-token chain (BFS).  With
+    backend="sqlite" the tables live in a SQLite file instead of RAM."""
 
     pool: TokenPool
     max_depth: int
@@ -406,19 +410,12 @@ Perturbs irreducible blocks so later sweeps can find new reductions; None if no 
 class DiskComputeGraph:
     """Compute graph backed by SQLite instead of in-RAM dicts.
 
-    The exhaustive BFS is *level-synchronous*: only the current frontier's
-    unitaries (d x d complex matrices) are held in memory, while the node
-    tables (key -> shortest token chain, plus alternative chains) stream to a
-    SQLite file.  A compact in-RAM set of the node keys keeps membership
-    checks O(1) without retaining any chains, so a ``--deep`` NISQ database
-    (3-wire, depth 6, ~3.2M nodes) builds and looks up on a laptop where the
-    all-RAM graph would need many GB just for its chain dict.
-
-    The public interface mirrors :class:`ComputeGraph` (lookup, try_reduce,
-    try_reduce_cost, try_reduce_escape, block_unitary, buckets view), so the
-    rest of the pipeline -- including the batched sweep, which only touches
-    ``buckets.get``, ``_token_matrices`` and ``digest_decimals`` -- works
-    unchanged.
+    The BFS is level-synchronous: only the current frontier's unitaries are
+    held in memory; node tables (key -> shortest token chain) stream to a
+    SQLite file, with an in-RAM key set for O(1) membership checks.  Deep
+    (3-wire, depth 6, ~3.2M nodes) graphs build on a laptop where the
+    all-RAM graph would not fit.  The public interface mirrors
+    :class:`ComputeGraph`, so the rest of the pipeline works unchanged.
     """
 
     pool: TokenPool
@@ -896,11 +893,9 @@ class ReductionDatabase:
         ]
 
     def try_reduce(self, block: list[GateInstance]) -> list[GateInstance] | None:
-        """Reduce ``block`` (gates on arbitrary wires) if a shorter equivalent exists.
+        """Reduce ``block`` (touching <=3 wires) to a shorter equivalent, or None.
 
-        Blocks touching at most 3 wires are mapped into a low-dimensional space,
-        looked up, and mapped back.  Returns None if no reduction is found or the
-        block touches more wires than any available graph.
+        Blocks touching more wires than any available graph are not reducible.
         """
         wires = sorted({q for gate in block for q in gate.qubits})
         wire_count = len(wires)

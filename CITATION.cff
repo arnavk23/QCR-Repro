@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it and the paper it reproduces."
+title: "qcr-repro: optimization-driven quantum circuit reduction"
+version: 0.1.0
+authors:
+  - name: "Arnav Kapoor"
+date-released: "2026-08-13"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Rosenhahn"
+      given-names: "Bodo"
+    - family-names: "Osborne"
+      given-names: "Tobias J"
+    - family-names: "Hirche"
+      given-names: "Christoph"
+  title: "Optimization driven quantum circuit reduction"
+  journal: "New Journal of Physics"
+  volume: 27
+  number: 10
+  pages: "104509"
+  year: 2025
+  doi: "10.1088/1367-2630/ade6e3"

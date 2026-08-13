@@ -1,13 +1,12 @@
 # Optimization-Driven Quantum Circuit Reduction — Implementation & Comparison
 
-This repository is a working implementation of
+This is a Python implementation of
 
 **Bodo Rosenhahn, Tobias J Osborne, Christoph Hirche, "Optimization driven quantum circuit reduction," New J. Phys. 27 (2025) 104509**
 
-built around the paper's local term-replacement scheme (variants V1–V3), and it
-adds an **original exact engine** that reduces the paper's own test circuits
-further than the paper's reported results on the ion-trap gate set, while
-staying bit-exact (no 1e-5 tolerance anywhere).
+implementing the paper's local term-replacement scheme (variants V1–V3) and
+adding a bit-exact symplectic (Clifford) engine that reduces the paper's
+ion-trap test circuits further than the paper reports (no tolerance anywhere).
 
 Headline comparison (`results/comparison/`, 4 qubits, 300-gate random
 circuits, identical circuits for every method, 100 circuits per method):
@@ -17,28 +16,24 @@ circuits, identical circuits for every method, 100 circuits per method):
 | Ion trap (RX/RY/RZ/RXX) | 111 gates (RXX 43) | **73.5 exact_len / 71.6 exact_cost (RXX 30.9 / 27.2)** | −34% / −36% |
 | NISQ (RX/RZ/CZ) | 107 gates (CZ 43) | 160.9 numeric_len / 160.5 numeric_cost (CZ 50.3 / 49.6) | gap remains |
 
-On NISQ our qiskit baseline replication matches the paper's reported qiskit
-numbers (158 vs 149 on L2/L3), confirming the protocol is faithful and the
-comparison is fair; the remaining NISQ gap is database-depth limited on this
-laptop. The NISQ levers below (RF-gated lookup, exact/numeric hybrid,
-disk-backed databases, larger honest budgets) are the path to closing it.
+On NISQ our qiskit baselines match the paper's (158 vs 149 at L2/L3), so the
+comparison is fair; the remaining gap is database-depth limited on this laptop.
+The "NISQ levers" section below is the path to closing it.
 
 ## Repository layout
 
 ```
-matlab_demo/         reference MATLAB demo from the paper (QCOptimDemo)
-src/                Python package (`qcr_repro`): gate/token models
-                    compute-graph DB, exact symplectic engine, reducers, QASM I/O
-scripts/            benchmarks, figure generation, report builders
-results/            benchmark outputs, organized by protocol
-  demo_sweep/   paper-style sweep on the demo circuit
-    strict/             strict tolerance (1e-5)
-    loose/              loose tolerance (1e-3)
-  comparison/            head-to-head comparison benchmark (CSV + reports)
-  paper_tables/            paper tables from benchmark data (scripts/generate_paper_tables.py)
-paper/              reference material (the paper PDF)
-figures/            generated figures (1-6 protocol runs, 7-9 comparison)
-report/             results report (LaTeX + Markdown), data
+matlab_demo/     reference MATLAB demo from the paper (QCOptimDemo)
+src/             Python package (`qcr_repro`): gate/token models, compute-graph
+                 DB, exact symplectic engine, reducers, QASM I/O
+scripts/         benchmarks, figure generation, report builders
+results/         benchmark outputs, organized by protocol
+  demo_sweep/      paper-style sweep on the demo circuit (strict/, loose/)
+  comparison/      head-to-head comparison benchmark (CSV + reports)
+  comparison_deep/ deep-database NISQ comparison runs
+paper/           reference material (the paper PDF, citation.bib)
+figures/         generated figures (1-6 protocol runs, 7-9 comparison)
+report/          results report (LaTeX + Markdown), data
 ```
 
 ## Quickstart
@@ -74,17 +69,15 @@ per-type means, WIN/LOSE verdicts vs the paper's numbers, and a baseline
 fidelity check against the paper's reported qiskit/BQSKit means.
 
 **Timing caveat.** The "time (s)" column in the comparison reports is the
-per-circuit **budget cap** (each reducer loops until its budget is exhausted)
-— it is a cutoff, not a convergence time, so it must not be read as an
-apple-to-apples timing comparison against the paper's Table 2 (which measures
-a different task: reducing 100-gate circuits to ~50, ~38 s for their best
-variant).
+per-circuit **budget cap** (each reducer loops until it is exhausted), not a
+convergence time, and is not comparable to the paper's Table 2 (a different
+task: 100-gate circuits reduced to ~50, ~38 s for their best variant).
 
-What makes our reducers strong:
+Reducers:
 
-- **Exact symplectic engine** (`src/symplectic.py`): Clifford-pool
-  lookups are keyed by a bit-exact signed tableau — replacements are equivalent
-  up to global phase *by construction*, and final verification is exact.
+- **Exact symplectic engine** (`src/symplectic.py`): Clifford-pool lookups are
+  keyed by a bit-exact signed tableau — replacements are equivalent up to
+  global phase by construction, and final verification is exact.
 - **Cost-aware objective**: every lookup minimizes (two-qubit count, length) —
   the decoherence objective the paper defers to future work — including
   equal-length rewrites that cut RXX/CZ count.
@@ -146,7 +139,7 @@ lookup database a laptop can build in memory. Four levers are implemented and
 opt-in from `scripts/benchmark_comparison.py`:
 
 ```bash
-# 1. larger, honestly-reported budgets (NISQ defaults to 60 s vs 30 s ion trap)
+# 1. larger per-gate-set time budgets (NISQ defaults to 60 s vs 30 s ion trap)
 python scripts/benchmark_comparison.py --gateset nisq --budget 60
 
 # 2. V3-style RF-gated lookup: an online RandomForest learns which blocks
@@ -165,17 +158,14 @@ python scripts/benchmark_comparison.py --gateset nisq --backend sqlite --depths 
 ```
 
 - `--rf-gate` implements the paper's V3 idea (RandomForest-gated lookup): an
-exact memo cache remembers already-tried irreducible blocks (a guaranteed
-win — repeated windows after transport shuffles are skipped at zero cost),
-and a lazily-trained classifier (sklearn `RandomForestClassifier`, optional
-`[ml]` extra) scores novel blocks. Skipping never changes equivalence — it
-only reallocates budget. **Measured caveat:** on this exhaustive-sweep
-reducer the classifier component is neutral-to-negative for end length
-(tested at 10-60 s budgets, `scripts/check_levers.py`
-and the tuning probes) — the sweep already terminates when no window
-reduces, so gating causes premature convergence. The paper's V3 gated their
-*random-sampling* loop, where DB lookups are the bottleneck; that is the
-regime where the classifier helps.
+  exact memo cache skips already-tried irreducible blocks at zero cost, and a
+  lazily-trained classifier (sklearn, optional `[ml]` extra) scores novel ones.
+  Skipping never changes equivalence, only the budget allocation. **Measured
+  caveat:** on this exhaustive-sweep reducer the classifier is
+  neutral-to-negative for end length (`scripts/check_levers.py`, tuning
+  probes) — the sweep already terminates when no window reduces, so gating
+  causes premature convergence. The paper's V3 gated a *random-sampling* loop,
+  where lookups are the bottleneck; that is where the classifier helps.
 - `--hybrid` routes every sweep window to the exact symplectic engine when it
 is fully Clifford (all angles ±π/2), falling back to the numeric database
 only for windows containing non-Clifford ±π/4 angles. The Clifford sub-pool

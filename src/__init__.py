@@ -1,3 +1,11 @@
+"""qcr_repro: optimization-driven quantum circuit reduction.
+
+Implements Rosenhahn, Osborne & Hirche, NJP 27 (2025) 104509 (variants
+V1-V3) plus a bit-exact symplectic engine for Clifford gate pools.
+"""
+
+__version__ = "0.1.0"
+
 import sys as _sys
 
 from .config import DEFAULT_ANGLES, GateInstance, GateSetName

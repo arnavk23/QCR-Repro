@@ -292,12 +292,10 @@ Stable-partitions RZ per wire between RX barriers, collapses the runs, and itera
 
 
 def rz_global_pass_fixpoint(gates: list[GateInstance], one_wire_graph, max_iters: int = 8) -> int:
-    """Iterate :func:`rz_global_pass` to a fixpoint.
+    """Iterate :func:`rz_global_pass` until nothing more collapses.
 
-    A single pass gathers RZ runs per wire and collapses them, but a collapse
-    can expose new RZ adjacencies (the sweep that follows can also merge gates
-    that leave fresh RZ runs).  Iterating to a fixpoint is cheap (O(n) per
-    pass) and guarantees the pass no longer finds anything to remove.
+    A collapse can expose new RZ adjacencies, so a single pass need not reach
+    the fixpoint; iterating is cheap (O(n) per pass).
     """
     total = 0
     for _ in range(max_iters):
@@ -519,19 +517,12 @@ def reduce_circuit(
     """Strong reducer: cluster + collapse + sweep, transport shuffle, escape.
 
     The escape move resamples an irreducible window with a structurally
-    different (possibly longer) equivalent word from the compute graph's cycle
-    structure, then re-sweeps; the change is kept only if it does not worsen
-    the circuit.  ``rz_pass`` enables the NISQ-specific RZ-across-CZ transport
-    pass (iterated to a fixpoint).  ``cost_aware=True`` minimizes
-    (two-qubit count, length) per window replacement instead of length alone
-    (matches the exact engine's objective).
-
-    ``algebraic`` / ``zx`` enable the cheap pre-passes (qcr_repro.prepass) that
-    shrink the input *before* the database loop using exact rotation-fusion and
-    ZX-cancellation rules (fused angles are always pool-representable).
-    ``use_batched`` swaps the per-window scalar sweep for the vectorized batched
-    sweep (qcr_repro.batched), which is bit-identical in results (see
-    scripts/check_batched_vs_scalar.py).
+    different equivalent word, then re-sweeps; kept only if it does not
+    worsen the circuit.  ``rz_pass`` runs the NISQ RZ-across-CZ pass to a
+    fixpoint; ``cost_aware`` minimizes (two-qubit count, length);
+    ``algebraic``/``zx`` enable the prepass rules (prepass.py);
+    ``use_batched`` swaps the scalar sweep for the bit-identical batched
+    sweep (batched.py, scripts/check_batched_vs_scalar.py).
     Returns (reduced, passes, replacements).
     """
     rng = random.Random(seed)
@@ -551,10 +542,9 @@ def reduce_circuit(
     one_wire = db.graphs.get(1)
 
     def sweep_fn(gates_list, num_qubits_, db_, max_block_len_) -> int:
-        """Cost-aware mode pushes both the (twq, len) and the pure-length
-        objective on every pass; length-only mode matches the paper's metric.
-        Batched mode (length objective only) is bit-identical to the scalar
-        sweep (see scripts/check_batched_vs_scalar.py)."""
+        """Cost-aware pushes both (twq, len) and pure-length objectives;
+        length-only matches the paper's metric.  Batched mode (length only)
+        is bit-identical to the scalar sweep (scripts/check_batched_vs_scalar.py)."""
         if cost_aware:
             return _sweep_reduce_cost(gates_list, num_qubits_, db_, max_block_len_) + _sweep_reduce(
                 gates_list, num_qubits_, db_, max_block_len_
