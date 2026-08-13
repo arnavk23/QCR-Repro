@@ -17,8 +17,11 @@ circuits, identical circuits for every method, 100 circuits per method):
 | NISQ (RX/RZ/CZ) | 107 gates (CZ 43) | 160.9 numeric_len / 160.5 numeric_cost (CZ 50.3 / 49.6) | gap remains |
 
 On NISQ our qiskit baselines match the paper's (158 vs 149 at L2/L3), so the
-comparison is fair; the remaining gap is database-depth limited on this laptop.
-The "NISQ levers" section below is the path to closing it.
+comparison is fair; the remaining gap is statistically significant, and input
+composition, database depth, time budget and the paper's own random-sampling
+loop are all ruled out as explanations (report §2.2). The gap is isolated to
+database factorization coverage on 3-wire blocks; the "NISQ levers" section
+below documents the remaining tools.
 
 ## Repository layout
 
@@ -31,6 +34,7 @@ results/         benchmark outputs, organized by protocol
   demo_sweep/      paper-style sweep on the demo circuit (strict/, loose/)
   comparison/      head-to-head comparison benchmark (CSV + reports)
   comparison_deep/ deep-database NISQ comparison runs
+  rf_sampling/     paper V2/V3 loop reimplementation benchmark
 paper/           reference material (the paper PDF, citation.bib)
 figures/         generated figures (1-6 protocol runs, 7-9 comparison)
 report/          results report (LaTeX + Markdown), data
@@ -133,10 +137,12 @@ Outputs land in `results/prepass/` (`comparison_prepass_report.md/csv/json`).
 
 ## NISQ levers (closing the Table 7 gap)
 
-The NISQ gap is a search-space problem, not an algorithmic one: the exact
-engine is Clifford-only, and the numeric fallback is limited by how deep a
-lookup database a laptop can build in memory. Four levers are implemented and
-opt-in from `scripts/benchmark_comparison.py`:
+The NISQ gap is real and statistically significant, but experiments rule out
+input composition, database depth (a `--deep` run narrows the mean by only
+~2%), time budget, and the paper's own random-sampling loop
+(`scripts/benchmark_rf_sampling.py`) as explanations; the residual gap is
+attributed to database factorization coverage. Four levers remain implemented
+and opt-in from `scripts/benchmark_comparison.py`:
 
 ```bash
 # 1. larger per-gate-set time budgets (NISQ defaults to 60 s vs 30 s ion trap)
@@ -164,8 +170,10 @@ python scripts/benchmark_comparison.py --gateset nisq --backend sqlite --depths 
   caveat:** on this exhaustive-sweep reducer the classifier is
   neutral-to-negative for end length (`scripts/check_levers.py`, tuning
   probes) — the sweep already terminates when no window reduces, so gating
-  causes premature convergence. The paper's V3 gated a *random-sampling* loop,
-  where lookups are the bottleneck; that is where the classifier helps.
+  causes premature convergence. The paper's V3 gated a *random-sampling* loop;
+  we benchmarked our reimplementation of that loop too
+  (`scripts/benchmark_rf_sampling.py`) and the classifier is worse there as
+  well (179.5 vs 168.2), for the same premature-convergence reason.
 - `--hybrid` routes every sweep window to the exact symplectic engine when it
 is fully Clifford (all angles ±π/2), falling back to the numeric database
 only for windows containing non-Clifford ±π/4 angles. The Clifford sub-pool

@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it and the paper it reproduces."
+message: "If you use this software, please cite it and the paper it cites."
 title: "qcr-repro: optimization-driven quantum circuit reduction"
 version: 0.1.0
 authors:
@@ -20,4 +20,4 @@ preferred-citation:
   number: 10
   pages: "104509"
   year: 2025
-  doi: "10.1088/1367-2630/ade6e3"
+  doi: "10.1088/1367-2630/ae0e40"

@@ -60,6 +60,17 @@ Rows 0..n-1 hold images of X_i, rows n..2n-1 of Z_i, as (xmask, zmask) int pairs
             if (self.zrows[i] >> t) & 1:
                 self.zrows[i] ^= zb
 
+    def swap(self, a: int, b: int) -> None:
+        """SWAP_{a,b}: exchange columns a and b in both the X and Z blocks."""
+        xa, xb = 1 << a, 1 << b
+        for i in range(2 * self.n):
+            x = self.xrows[i]
+            z = self.zrows[i]
+            xt = ((x >> a) & 1) ^ ((x >> b) & 1)
+            zt = ((z >> a) & 1) ^ ((z >> b) & 1)
+            self.xrows[i] = x ^ (xt << a) ^ (xt << b)
+            self.zrows[i] = z ^ (zt << a) ^ (zt << b)
+
     # -- pool gates (compositions of the primitives, up to global phase)
 
     def rz(self, a: int, theta: float) -> None:
