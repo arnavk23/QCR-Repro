@@ -1,0 +1,92 @@
+{
+  "meta": {
+    "gateset": "nisq",
+    "num_circuits": 100,
+    "num_qubits": 4,
+    "length": 300,
+    "budget": 15.0,
+    "depths": {
+      "1": 12,
+      "2": 6,
+      "3": 5,
+      "4": 4
+    },
+    "max_block_len": 10,
+    "rz_pass": true,
+    "weights": {
+      "RX": 1.0,
+      "RZ": 1.0,
+      "CZ": 2.0
+    },
+    "restarts": 1,
+    "date": "2026-08-13 01:07:31",
+    "wall_sec": 415.6,
+    "with_numeric": false,
+    "method_order": [
+      "numeric_len",
+      "numeric_cost",
+      "qiskit_l1",
+      "qiskit_l2",
+      "qiskit_l3",
+      "bqskit_l2",
+      "bqskit_l3",
+      "bqskit_l4"
+    ]
+  },
+  "methods": {
+    "numeric_len": {
+      "n": 100,
+      "end_mean": 164,
+      "end_std": 12.718490476467716,
+      "end_best": 135,
+      "twq_mean": 50.9,
+      "twq_std": 5.572252686302013,
+      "counts": {
+        "RX": [
+          69.31,
+          5.999491645131277
+        ],
+        "RZ": [
+          43.79,
+          5.400546268665791
+        ],
+        "CZ": [
+          50.9,
+          5.572252686302013
+        ]
+      },
+      "secs_mean": 15.766499643325806,
+      "ok_rate": 1.0
+    },
+    "numeric_cost": {
+      "n": 100,
+      "end_mean": 164.58,
+      "end_std": 13.29299063416506,
+      "end_best": 133,
+      "twq_mean": 50.66,
+      "twq_std": 5.621779077836481,
+      "counts": {
+        "RX": [
+          69.69,
+          6.045982136923661
+        ],
+        "RZ": [
+          44.23,
+          5.610445615100462
+        ],
+        "CZ": [
+          50.66,
+          5.621779077836481
+        ]
+      },
+      "secs_mean": 16.087538628578187,
+      "ok_rate": 1.0
+    },
+    "qiskit_l1": {},
+    "qiskit_l2": {},
+    "qiskit_l3": {},
+    "bqskit_l2": {},
+    "bqskit_l3": {},
+    "bqskit_l4": {}
+  }
+}

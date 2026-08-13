@@ -1,0 +1,96 @@
+{
+  "meta": {
+    "gateset": "ion_trap",
+    "num_circuits": 8,
+    "num_qubits": 4,
+    "length": 300,
+    "budget": 10.0,
+    "depths": {
+      "1": 12,
+      "2": 10,
+      "3": 7,
+      "4": 5
+    },
+    "max_block_len": 8,
+    "rz_pass": false,
+    "weights": null,
+    "restarts": 1,
+    "date": "2026-08-13 00:48:02",
+    "wall_sec": 36.6,
+    "with_numeric": false,
+    "method_order": [
+      "exact_len",
+      "exact_cost",
+      "qiskit_l1",
+      "qiskit_l2",
+      "qiskit_l3",
+      "bqskit_l2",
+      "bqskit_l3",
+      "bqskit_l4"
+    ]
+  },
+  "methods": {
+    "exact_len": {
+      "n": 8,
+      "end_mean": 98.125,
+      "end_std": 15.119833828451952,
+      "end_best": 62,
+      "twq_mean": 39.875,
+      "twq_std": 6.679025003696273,
+      "counts": {
+        "RX": [
+          6.5,
+          1.118033988749895
+        ],
+        "RY": [
+          25.875,
+          4.910129835350589
+        ],
+        "RZ": [
+          25.875,
+          5.278198082679353
+        ],
+        "RXX": [
+          39.875,
+          6.679025003696273
+        ]
+      },
+      "secs_mean": 10.248149067163467,
+      "ok_rate": 1.0
+    },
+    "exact_cost": {
+      "n": 8,
+      "end_mean": 95,
+      "end_std": 12.379418403139947,
+      "end_best": 69,
+      "twq_mean": 33.5,
+      "twq_std": 4.153311931459037,
+      "counts": {
+        "RX": [
+          9.75,
+          1.713913650100261
+        ],
+        "RY": [
+          24.25,
+          5.0682837331783235
+        ],
+        "RZ": [
+          27.5,
+          5.852349955359813
+        ],
+        "RXX": [
+          33.5,
+          4.153311931459037
+        ]
+      },
+      "secs_mean": 10.30151104927063,
+      "ok_rate": 1.0
+    },
+    "qiskit_l1": {},
+    "qiskit_l2": {},
+    "qiskit_l3": {},
+    "bqskit_l2": {},
+    "bqskit_l3": {},
+    "bqskit_l4": {}
+  }
+}

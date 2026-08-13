@@ -319,7 +319,17 @@ class SymplecticDatabase:
             return pickle.load(file)
 
 
-_CACHE_DIR = Path(__file__).resolve().parents[2] / ".cache"
+def _repo_root() -> Path:
+    """Locate the repository root (contains pyproject.toml) from any layout."""
+    p = Path(__file__).resolve().parent
+    for _ in range(4):
+        if (p / "pyproject.toml").exists():
+            return p
+        p = p.parent
+    return Path(__file__).resolve().parents[2]
+
+
+_CACHE_DIR = _repo_root() / ".cache"
 
 
 def _exact_filename(db: SymplecticDatabase) -> str:

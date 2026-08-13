@@ -15,7 +15,7 @@ from .reducer import (
     cluster_single_qubit,
     gates_commute,
     reduce_single_wire_runs,
-    rz_global_pass,
+    rz_global_pass_fixpoint,
 )
 from .symplectic import SignedTableau, circuits_equal_exact
 
@@ -283,14 +283,14 @@ cost_aware=True minimizes (two-qubit count, length); prefer maps gate names to c
     cluster_single_qubit(working, num_qubits)
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
-        reduced += rz_global_pass(working, one_wire)
+        reduced += rz_global_pass_fixpoint(working, one_wire)
     reduced += do_sweeps(working, db, max_block_len)
     if done():
         return working, _stats(gates, working, passes, reduced, t0)
     cluster_single_qubit(working, num_qubits)
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
-        reduced += rz_global_pass(working, one_wire)
+        reduced += rz_global_pass_fixpoint(working, one_wire)
     reduced += do_sweeps(working, db, max_block_len)
     if done():
         return working, _stats(gates, working, passes, reduced, t0)
@@ -301,13 +301,13 @@ cost_aware=True minimizes (two-qubit count, length); prefer maps gate names to c
         # transport shuffle using exact commutation via memoized numeric checks
         _transport_shuffle(working, num_qubits, rng, cache, direction=1 if passes % 2 else -1)
         if rz_pass:
-            reduced += rz_global_pass(working, one_wire)
+            reduced += rz_global_pass_fixpoint(working, one_wire)
         found = do_sweeps(working, db, max_block_len)
         if found == 0:
             cluster_single_qubit(working, num_qubits)
             found += reduce_single_wire_runs(working, one_wire)
             if rz_pass:
-                found += rz_global_pass(working, one_wire)
+                found += rz_global_pass_fixpoint(working, one_wire)
             found += do_sweeps(working, db, max_block_len)
         reduced += found
         if found == 0:

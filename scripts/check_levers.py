@@ -23,7 +23,7 @@ from qcr_repro.reducer import reduce_circuit
 from qcr_repro.rf_gate import RfGate, RfGatedDatabase
 from qcr_repro.unitary import equivalent_up_to_global_phase
 
-NISQ_DEPTHS = {1: 12, 2: 5, 3: 4, 4: 4}  # matches the cached RAM database
+NISQ_DEPTHS = {1: 12, 2: 6, 3: 5, 4: 4}  # matches the cached RAM database
 HYBRID_EXACT_DEPTHS = {1: 12, 2: 8, 3: 6, 4: 5}
 BUDGET = 8.0
 SEEDS = (1, 2)

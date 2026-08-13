@@ -560,10 +560,10 @@ def main() -> None:
     if args.gateset == "nisq" and not args.depths:
         mode = "deep" if args.deep else "default"
         print(
-            f"[note] NISQ {mode} depths {depths}: the 1/2/3-wire graphs will be rebuilt once and "
-            f"cached (.cache/, backend {backend}). Use --depths 1:12,2:5,3:4,4:4 to reuse the "
-            "pre-built database. (--deep implies the sqlite backend so the deep graphs build "
-            "within a laptop's memory; they build more slowly but reduce more.)",
+            f"[note] NISQ {mode} depths {depths} (backend {backend}): built once and "
+            f"cached in .cache/. Use --depths to override. (--deep implies the sqlite "
+            "backend so the deep graphs build within a laptop's memory; they build more "
+            "slowly but reduce more.)",
             flush=True,
         )
 

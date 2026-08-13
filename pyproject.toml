@@ -27,5 +27,5 @@ ml = [
 ]
 
 [tool.setuptools]
-package-dir = { "" = "src" }
-packages = { find = { where = ["src"] } }
+package-dir = { "qcr_repro" = "src" }
+packages = ["qcr_repro"]

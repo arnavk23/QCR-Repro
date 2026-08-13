@@ -403,6 +403,364 @@ Perturbs irreducible blocks so later sweeps can find new reductions; None if no 
 
 
 @dataclass
+class DiskComputeGraph:
+    """Compute graph backed by SQLite instead of in-RAM dicts.
+
+    The exhaustive BFS is *level-synchronous*: only the current frontier's
+    unitaries (d x d complex matrices) are held in memory, while the node
+    tables (key -> shortest token chain, plus alternative chains) stream to a
+    SQLite file.  A compact in-RAM set of the node keys keeps membership
+    checks O(1) without retaining any chains, so a ``--deep`` NISQ database
+    (3-wire, depth 6, ~3.2M nodes) builds and looks up on a laptop where the
+    all-RAM graph would need many GB just for its chain dict.
+
+    The public interface mirrors :class:`ComputeGraph` (lookup, try_reduce,
+    try_reduce_cost, try_reduce_escape, block_unitary, buckets view), so the
+    rest of the pipeline -- including the batched sweep, which only touches
+    ``buckets.get``, ``_token_matrices`` and ``digest_decimals`` -- works
+    unchanged.
+    """
+
+    pool: TokenPool
+    max_depth: int
+    db_path: Path
+    digest_decimals: int = 10
+    max_alts: int = 4
+    _keys: set[bytes] = field(default_factory=set, repr=False)
+    _conn: sqlite3.Connection | None = field(default=None, repr=False)
+    _token_matrices: dict[int, np.ndarray] = field(default_factory=dict, repr=False)
+    _num_nodes: int = 0
+
+    # ------------------------------------------------------------------ #
+    # construction / persistence
+    # ------------------------------------------------------------------ #
+
+    def __post_init__(self) -> None:
+        if not self._keys:
+            self._build()
+        self._connect()
+
+    def _connect(self) -> sqlite3.Connection:
+        if self._conn is None:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA journal_mode=OFF")
+            conn.execute("PRAGMA synchronous=OFF")
+            conn.execute("PRAGMA cache_size=-200000")
+            self._conn = conn
+        return self._conn
+
+    @staticmethod
+    def _create_schema(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE IF NOT EXISTS nodes (key BLOB PRIMARY KEY, chain BLOB, twq INT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS alts (key BLOB, chain BLOB, twq INT)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_alts_key ON alts (key)")
+
+    def _build(self) -> None:
+        db_path = Path(self.db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode=OFF")
+        conn.execute("PRAGMA synchronous=OFF")
+        self._create_schema(conn)
+
+        dim = 2 ** self.pool.num_qubits
+        identity = np.eye(dim, dtype=complex)
+        cached = {
+            token: embedded_gate_matrix(self.pool.num_qubits, self.pool.gate_for_token(token))
+            for token in self.pool.tokens()
+        }
+        self._token_matrices = cached
+
+        root_key = self._node_key(identity.reshape(-1), self.digest_decimals)
+        self._keys = {root_key}
+        self._num_nodes = 1
+        conn.execute("INSERT OR IGNORE INTO nodes VALUES (?, ?, ?)", (root_key, b"", 0))
+
+        # During the build the shortest chains and alternative chains are held
+        # in RAM (they are needed for O(1) dedup / alt bookkeeping); they are
+        # streamed to SQLite level by level and dropped before return so the
+        # frontier matrices are the only large resident structure.
+        shortest: dict[bytes, tuple[int, ...]] = {root_key: ()}
+        alts: dict[bytes, list[tuple[int, ...]]] = {root_key: []}
+        twq_by_token = {
+            token: 1 if len(self.pool.gate_for_token(token).qubits) == 2 else 0
+            for token in self.pool.tokens()
+        }
+
+        frontier: list[tuple[np.ndarray, tuple[int, ...]]] = [(identity, ())]
+        level = 0
+        t0 = time.time()
+        while frontier and level < self.max_depth:
+            level += 1
+            next_frontier: list[tuple[np.ndarray, tuple[int, ...]]] = []
+            rows: list[tuple[bytes, bytes, int]] = []
+            alt_rows: list[tuple[bytes, bytes, int]] = []
+            for u, chain in frontier:
+                for token, gate_u in cached.items():
+                    next_u = gate_u @ u
+                    flat = next_u.reshape(-1)
+                    idx = int(np.argmax(np.round(np.abs(flat), 8)))
+                    phase = np.angle(flat[idx])
+                    nflat = flat * np.exp(-1j * phase)
+                    key = self._node_key(nflat, self.digest_decimals)
+                    new_chain = chain + (token,)
+                    existing = shortest.get(key)
+                    if existing is not None:
+                        # The graph contains cycles: the same unitary admits
+                        # many words.  Keep a few structurally different
+                        # factorizations for escape / cost-aware resampling.
+                        bucket = alts[key]
+                        if (
+                            len(bucket) < self.max_alts
+                            and new_chain != existing
+                            and new_chain not in bucket
+                        ):
+                            bucket.append(new_chain)
+                            alt_rows.append((key, pickle.dumps(new_chain), 0))
+                        continue
+                    shortest[key] = new_chain
+                    alts[key] = []
+                    self._keys.add(key)
+                    self._num_nodes += 1
+                    rows.append((key, pickle.dumps(new_chain), twq_by_token[token]))
+                    next_frontier.append((next_u, new_chain))
+            conn.executemany("INSERT OR IGNORE INTO nodes VALUES (?, ?, ?)", rows)
+            if alt_rows:
+                conn.executemany("INSERT INTO alts VALUES (?, ?, ?)", alt_rows)
+            conn.commit()
+            frontier = next_frontier
+            print(f"    [disk graph] level {level}: +{len(rows)} nodes "
+                  f"(frontier {len(frontier)}, total {self._num_nodes}, "
+                  f"{time.time() - t0:.1f}s)", flush=True)
+        conn.commit()
+        conn.close()
+        # Free the build-time tables; lookups read from SQLite from here on.
+        del shortest, alts
+
+    @staticmethod
+    def _node_key(flat_normalized: np.ndarray, decimals: int) -> bytes:
+        rounded = (np.round(flat_normalized, decimals) + 0.0).tobytes()
+        return hashlib.sha256(rounded).digest()
+
+    def save(self, path: Path) -> None:
+        # Persist the manifest; the SQLite file lives at self.db_path.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = None  # drop the live connection before pickling
+        with path.open("wb") as file:
+            pickle.dump(self, file)
+
+    @classmethod
+    def load(cls, path: Path) -> "DiskComputeGraph":
+        with path.open("rb") as file:
+            obj = pickle.load(file)
+        obj._connect()
+        obj._rebuild_keys()
+        return obj
+
+    def _rebuild_keys(self) -> None:
+        conn = self._connect()
+        self._keys = set()
+        self._num_nodes = 0
+        for (key,) in conn.execute("SELECT key FROM nodes"):
+            self._keys.add(key)
+            self._num_nodes += 1
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state["_conn"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._connect()
+        self._rebuild_keys()
+
+    # ------------------------------------------------------------------ #
+    # lookups
+    # ------------------------------------------------------------------ #
+
+    @property
+    def num_nodes(self) -> int:
+        return self._num_nodes
+
+    @property
+    def num_edges(self) -> int:
+        return self.pool.num_qubits * len(self.pool.tokens()) * self._num_nodes
+
+    @property
+    def buckets(self) -> "_BucketView":
+        return _BucketView(self)
+
+    def lookup(self, unitary: np.ndarray) -> tuple[int, ...] | None:
+        flat = unitary.reshape(-1)
+        idx = int(np.argmax(np.round(np.abs(flat), 8)))
+        phase = np.angle(flat[idx])
+        nflat = flat * np.exp(-1j * phase)
+        key = self._node_key(nflat, self.digest_decimals)
+        return self._chain_for(key)
+
+    def _chain_for(self, key: bytes) -> tuple[int, ...] | None:
+        if key not in self._keys:
+            return None
+        conn = self._connect()
+        row = conn.execute("SELECT chain FROM nodes WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        return pickle.loads(row[0]) if row[0] else ()
+
+    def _alts_for(self, key: bytes) -> list[tuple[int, ...]]:
+        if key not in self._keys:
+            return []
+        conn = self._connect()
+        out = []
+        for (chain_blob,) in conn.execute("SELECT chain FROM alts WHERE key = ?", (key,)):
+            if chain_blob:
+                out.append(pickle.loads(chain_blob))
+        return out
+
+    def try_reduce(self, block: list[GateInstance]) -> list[GateInstance] | None:
+        u = self.block_unitary(block)
+        if u is None:
+            return None
+        chain = self.lookup(u)
+        if chain is None:
+            return None
+        return self.pool.decode(list(chain))
+
+    def _lookup_key(self, unitary: np.ndarray) -> bytes | None:
+        flat = unitary.reshape(-1)
+        idx = int(np.argmax(np.round(np.abs(flat), 8)))
+        phase = np.angle(flat[idx])
+        key = self._node_key(flat * np.exp(-1j * phase), self.digest_decimals)
+        return key if key in self._keys else None
+
+    def try_reduce_cost(self, block: list[GateInstance]) -> list[GateInstance] | None:
+        u = self.block_unitary(block)
+        if u is None:
+            return None
+        key = self._lookup_key(u)
+        if key is None:
+            return None
+        block_twq = sum(1 for g in block if len(g.qubits) == 2)
+        block_len = len(block)
+        shortest = self._chain_for(key)
+        candidates = [shortest] + self._alts_for(key)
+        seen: set[tuple[int, ...]] = set()
+        best: tuple[int, int, tuple[int, ...]] | None = None
+        for chain in candidates:
+            if chain is None or chain in seen:
+                continue
+            seen.add(chain)
+            if len(chain) > block_len:
+                continue
+            twq = _chain_two_qubit(chain, self.pool)
+            if len(chain) == block_len and twq >= block_twq:
+                continue
+            if best is None or (twq, len(chain)) < (best[0], best[1]):
+                best = (twq, len(chain), chain)
+        if best is None:
+            return None
+        return self.pool.decode(list(best[2]))
+
+    def try_reduce_escape(
+        self,
+        block: list[GateInstance],
+        rng: random.Random,
+        slack: int = 3,
+        prefer: dict[str, float] | None = None,
+    ) -> list[GateInstance] | None:
+        u = self.block_unitary(block)
+        if u is None:
+            return None
+        key = self._lookup_key(u)
+        if key is None:
+            return None
+        shortest = self._chain_for(key)
+        if shortest is None:
+            return None
+        alts = [c for c in self._alts_for(key) if 1 <= len(c) <= len(block) + slack and c != shortest]
+        if not alts:
+            return None
+
+        block_counts = _token_type_counts(block)
+        prefer = prefer or {}
+
+        def score(candidate: tuple[int, ...]) -> float:
+            cand_counts = _token_type_counts(self.pool.decode(list(candidate)))
+            diff = sum(abs(cand_counts.get(k, 0) - block_counts.get(k, 0)) for k in set(cand_counts) | set(block_counts))
+            pref = sum(prefer.get(g, 0.0) * cand_counts.get(g, 0) for g in prefer)
+            return diff + pref
+
+        best_score = max(score(c) for c in alts)
+        ties = [c for c in alts if score(c) == best_score]
+        chosen = rng.choice(ties)
+        return self.pool.decode(list(chosen))
+
+    def block_unitary(self, block: list[GateInstance]) -> np.ndarray | None:
+        dim = 2 ** self.pool.num_qubits
+        u = np.eye(dim, dtype=complex)
+        try:
+            for gate in block:
+                token = self.pool.token_for_gate(gate)
+                u = self._token_matrices[token] @ u
+        except KeyError:
+            return None
+        return u
+
+    def signature(self) -> tuple:
+        return (
+            self.pool.num_qubits,
+            self.pool.gate_set.name,
+            self.pool.angles,
+            self.pool.two_qubit_angles,
+            self.max_depth,
+            self.digest_decimals,
+        )
+
+
+class _BucketView:
+    """Read-only ``dict``-like view over a :class:`DiskComputeGraph` node table.
+
+    Exists so the batched sweep (``batched.lookup_batch`` does
+    ``graph.buckets.get(key)``) works unchanged against disk-backed graphs.
+    """
+
+    def __init__(self, graph: DiskComputeGraph):
+        self._graph = graph
+
+    def get(self, key: bytes, default=None):
+        chain = self._graph._chain_for(key)
+        return chain if chain is not None else default
+
+    def keys(self):
+        for key in self._graph._keys:
+            yield key
+
+    def values(self):
+        for key in self._graph._keys:
+            yield self._graph._chain_for(key)
+
+    def items(self):
+        for key in self._graph._keys:
+            yield key, self._graph._chain_for(key)
+
+    def __iter__(self):
+        return self.keys()
+
+    def __getitem__(self, key: bytes):
+        chain = self._graph._chain_for(key)
+        if chain is None:
+            raise KeyError(key)
+        return chain
+
+    def __contains__(self, key: bytes) -> bool:
+        return key in self._graph._keys
+
+    def __len__(self) -> int:
+        return self._graph._num_nodes
+
+
+@dataclass
 class ReductionDatabase:
     """Databases indexed by the number of wires a sampled block touches."""
 
@@ -415,7 +773,7 @@ class ReductionDatabase:
     backend: str = "ram"
     store_dir: Path | None = None
 
-    def build(self) -> None:
+    def build(self, storage: str = "ram", disk_dir: Path | None = None) -> None:
         for wires, depth in sorted(self.depths.items()):
             pool = TokenPool(
                 num_qubits=wires,
@@ -423,20 +781,11 @@ class ReductionDatabase:
                 angles=self.angles,
                 two_qubit_angles=self.two_qubit_angles,
             )
-            if self.backend == "sqlite":
-                if self.store_dir is None:
-                    raise ValueError("store_dir is required with backend='sqlite'")
-                self.store_dir.mkdir(parents=True, exist_ok=True)
-                graph = ComputeGraph(
-                    pool,
-                    depth,
-                    self.digest_decimals,
-                    backend="sqlite",
-                    store_path=self.store_dir / f"w{wires}.sqlite",
-                )
+            if storage == "disk":
+                db_path = disk_dir / f"graph_{self.gate_set_name}_{wires}w_d{depth}.sqlite"
+                self.graphs[wires] = DiskComputeGraph(pool, depth, db_path, self.digest_decimals)
             else:
-                graph = ComputeGraph(pool, depth, self.digest_decimals)
-            self.graphs[wires] = graph
+                self.graphs[wires] = ComputeGraph(pool, depth, self.digest_decimals)
 
     def signature(self) -> tuple:
         return (
@@ -448,6 +797,24 @@ class ReductionDatabase:
         )
 
     def save(self, path: Path) -> None:
+        if self.graphs and isinstance(next(iter(self.graphs.values())), DiskComputeGraph):
+            # DiskComputeGraph data lives in per-wire SQLite files; persist a
+            # JSON meta record plus a small manifest pickle per graph (the
+            # pickle only carries the key set + path; chains stay in SQLite).
+            path.mkdir(parents=True, exist_ok=True)
+            meta = {
+                "gate_set_name": self.gate_set_name,
+                "depths": dict(self.depths),
+                "angles": self.angles,
+                "two_qubit_angles": self.two_qubit_angles,
+                "digest_decimals": self.digest_decimals,
+                "storage": "disk",
+            }
+            with (path / "meta.json").open("w", encoding="utf-8") as file:
+                json.dump(meta, file)
+            for wires, graph in self.graphs.items():
+                graph.save(path / f"graph_{self.gate_set_name}_{wires}w_d{self.depths[wires]}.pkl")
+            return
         if self.backend == "sqlite":
             # The graph data already lives in SQLite files under ``path``;
             # persist a small JSON meta record and flush any pending writes.
@@ -484,8 +851,17 @@ class ReductionDatabase:
                 backend="sqlite",
                 store_dir=path,
             )
-            # build() attaches to the existing SQLite files (no rebuild: the
-            # buckets tables are non-empty) and initializes token matrices.
+            if meta.get("storage") == "disk":
+                for wires, depth in sorted(meta["depths"].items()):
+                    wires = int(wires)
+                    graph = DiskComputeGraph.load(
+                        path / f"graph_{meta['gate_set_name']}_{wires}w_d{depth}.pkl"
+                    )
+                    db.graphs[wires] = graph
+                return db
+            # legacy backend: build() attaches to the existing SQLite files
+            # (no rebuild: the buckets tables are non-empty) and initializes
+            # token matrices.
             db.build()
             return db
         with path.open("rb") as file:
@@ -586,7 +962,17 @@ class ReductionDatabase:
         ]
 
 
-_CACHE_DIR = Path(__file__).resolve().parents[2] / ".cache"
+def _repo_root() -> Path:
+    """Locate the repository root (contains pyproject.toml) from any layout."""
+    p = Path(__file__).resolve().parent
+    for _ in range(4):
+        if (p / "pyproject.toml").exists():
+            return p
+        p = p.parent
+    return Path(__file__).resolve().parents[2]
+
+
+_CACHE_DIR = _repo_root() / ".cache"
 
 
 def _db_filename(db: ReductionDatabase) -> str:
@@ -624,7 +1010,7 @@ backend="sqlite" stores bucket tables in SQLite files so deep graphs build withi
     )
 
     if backend == "sqlite":
-        store_dir = cache_dir / (_db_filename(db) + "_sqlite")
+        store_dir = cache_dir / (_db_filename(db) + "_disk")
         if (store_dir / "meta.json").exists():
             if verbose:
                 print(f"[cache] loading {store_dir.name}")
@@ -638,12 +1024,12 @@ backend="sqlite" stores bucket tables in SQLite files so deep graphs build withi
         db.backend = "sqlite"
         db.store_dir = store_dir
         t0 = time.time()
-        db.build()
+        db.build(storage="disk", disk_dir=store_dir)
         elapsed = time.time() - t0
         db.save(store_dir)
         if verbose:
             for wires, graph in sorted(db.graphs.items()):
-                print(f"  {wires}-wire sqlite graph: {graph.num_nodes} nodes (depth {graph.max_depth}, built {elapsed:.1f}s total)")
+                print(f"  {wires}-wire disk graph: {graph.num_nodes} nodes (depth {graph.max_depth}, built {elapsed:.1f}s total)")
         return db
 
     path = cache_dir / _db_filename(db)

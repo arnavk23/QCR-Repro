@@ -31,8 +31,8 @@ and the gap is database-depth limited on this laptop, not algorithmic.
 
 ```
 matlab_demo/         reference MATLAB demo from the paper (QCOptimDemo)
-src/qcr_repro/      Python package: gate/token models, numeric compute-graph DB,
-                    exact symplectic engine, reducers, QASM I/O
+src/                Python package (`qcr_repro`): gate/token models, numeric
+                    compute-graph DB, exact symplectic engine, reducers, QASM I/O
 scripts/            benchmarks, figure generation, report builders
 results/            benchmark outputs, organized by protocol
   demo_sweep/   paper-style sweep on the demo circuit (strict/ and loose/)
@@ -45,7 +45,7 @@ report/             this report (LaTeX + Markdown) and its data
 
 ## 1. Paper protocol benchmark
 
-The numeric port (`src/qcr_repro/reducer.py`) follows the paper's local
+The numeric port (`src/reducer.py`) follows the paper's local
 replacement scheme: sample contiguous blocks, remap to local wires, query a
 precomputed compute-graph database, accept replacements that are shorter and
 unitary-consistent (up to global phase).
@@ -174,14 +174,14 @@ budgets (NISQ defaults to 60 s).
 Two additions to the numeric pipeline, both verified bit-exact or
 unitary-preserving in `scripts/check_batched_vs_scalar.py`:
 
-- **Algebraic / ZX pre-passes** (`src/qcr_repro/prepass.py`): deterministic,
+- **Algebraic / ZX pre-passes** (`src/prepass.py`): deterministic,
   search-free reductions applied before the DB loop — adjacent same-axis
   rotation fusion (kept only when the sum snaps to a pool angle or cancels),
   CZ·CZ cancellation, and (NISQ) RZ-gathering across CZ so runs fuse. On the
   Table 7-style NISQ inputs this removes ~25% of the gates before any search;
   on the ion-trap inputs (pool of only ±π/2) it removes the exact
   cancellations. Output stays pool-representable; input unitary preserved.
-- **Batched sweep** (`src/qcr_repro/batched.py`): all window unitaries of a
+- **Batched sweep** (`src/batched.py`): all window unitaries of a
   pass are computed with batched numpy matmuls and vectorized phase
   normalization. It is bit-identical to the scalar sweep and measures
   ~1.5-1.7x faster on the length-300 ion-trap fixpoint; per-window SHA-256

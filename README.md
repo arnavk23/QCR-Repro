@@ -27,8 +27,8 @@ disk-backed databases, larger honest budgets) are the path to closing it.
 
 ```
 matlab_demo/         reference MATLAB demo from the paper (QCOptimDemo)
-src/qcr_repro/      Python package: gate/token models, numeric compute-graph DB,
-                    exact symplectic engine, reducers, QASM I/O
+src/                Python package (`qcr_repro`): gate/token models
+                    compute-graph DB, exact symplectic engine, reducers, QASM I/O
 scripts/            benchmarks, figure generation, report builders
 results/            benchmark outputs, organized by protocol
   demo_sweep/   paper-style sweep on the demo circuit
@@ -82,7 +82,7 @@ variant).
 
 What makes our reducers strong:
 
-- **Exact symplectic engine** (`src/qcr_repro/symplectic.py`): Clifford-pool
+- **Exact symplectic engine** (`src/symplectic.py`): Clifford-pool
   lookups are keyed by a bit-exact signed tableau — replacements are equivalent
   up to global phase *by construction*, and final verification is exact.
 - **Cost-aware objective**: every lookup minimizes (two-qubit count, length) —
@@ -97,7 +97,7 @@ What makes our reducers strong:
 Two cheap optimizations shrink and accelerate the database loop without
 changing its results:
 
-- `src/qcr_repro/prepass.py` — deterministic pre-passes applied *before* the
+- `src/prepass.py` — deterministic pre-passes applied *before* the
   DB loop: adjacent same-axis rotation fusion (RZ(a)RZ(b) = RZ(a+b), same for
   RX/RY/RXX, kept only when the sum snaps to a pool angle or cancels to the
   identity) plus the cheapest ZX-calculus rules (adjacent CZ·CZ = I and, for
@@ -105,7 +105,7 @@ changing its results:
   exact angle arithmetic, the output stays pool-representable, and the input
   unitary is preserved (verified in
   `scripts/check_batched_vs_scalar.py`).
-- `src/qcr_repro/batched.py` — a vectorized version of the exhaustive sweep:
+- `src/batched.py` — a vectorized version of the exhaustive sweep:
   all window unitaries of a pass are computed with batched matmuls and
   vectorized phase normalization instead of per-window Python matrix products.
   It is *bit-identical* to the scalar sweep (same protocol, same results) and
