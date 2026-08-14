@@ -1,0 +1,38 @@
+{
+  "by_method": {
+    "baseline": {
+      "final_len_mean": 151.75,
+      "final_len_std": 13.404143114409774,
+      "total_mean": 151.75,
+      "twq_mean": 48.95,
+      "runtime_mean": 30.272546100000092,
+      "prepass_removed_mean": 0,
+      "prepass_len_mean": 300,
+      "exact_ok": true
+    },
+    "prepass_dag": {
+      "final_len_mean": 151.55,
+      "final_len_std": 13.99802617664738,
+      "total_mean": 151.55,
+      "twq_mean": 49.25,
+      "runtime_mean": 30.421394764999967,
+      "prepass_removed_mean": 73.25,
+      "prepass_len_mean": 226.75,
+      "exact_ok": true
+    }
+  },
+  "paper": {
+    "RX": 45,
+    "RZ": 19,
+    "CZ": 43,
+    "total": 107
+  },
+  "args": {
+    "num_circuits": 20,
+    "budget": 30.0,
+    "length": 300,
+    "gateset": "nisq",
+    "seed_start": 1,
+    "methods": "baseline,prepass_dag"
+  }
+}

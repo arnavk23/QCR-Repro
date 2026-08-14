@@ -225,6 +225,70 @@ preserved. The batched sweep does not change which circuits are found — it
 only finds them faster, and the pre-passes make the input cheaper for the
 expensive loop.
 
+## 6. DAG block-compaction
+
+`src/dag.py` adds a deterministic alternative to `transport_shuffle` for
+exposing reducible windows to the exhaustive sweep. It builds the circuit's
+true per-wire dependency DAG (a gate depends on the most recent gate
+touching each of its wires) and reorders the gate list so every block of
+gates touching ≤3 wires becomes contiguous — generalizing the 2-qubit block
+collection used by production compilers (e.g. Qiskit's `Collect2qBlocks`) to
+k≤3-wire blocks. Any two gates that swap position under this reordering act
+on disjoint wires, so it is a valid topological order of the dependency DAG
+and provably preserves the unitary; verified on random ion-trap/NISQ
+circuits and adversarial edge cases in `scripts/check_dag_compact.py`.
+Resulting blocks run 6-14 gates on average (up to 30-54 at length 300) —
+well past the sweep's default 8-gate window cap, so the sweep sees
+substantially more candidate windows per pass than the un-compacted circuit.
+
+**Integration pitfall (worth recording).** The first attempt re-ran
+`compact_by_blocks` on every iteration of the existing stochastic loop
+alongside `transport_shuffle`. This made results *worse* at equal budget
+(ion trap: baseline 83.3 vs dag 87.4 mean length over 7 seeds, len 300,
+10s budget). Cause: `compact_by_blocks` is a pure function of the gate list,
+so re-running it on an unchanged, already-compacted list is a no-op;
+alternating it with `transport_shuffle` therefore quietly removed half of
+the loop's randomized-diversity passes (the mechanism that actually escapes
+local optima) on the — common — passes where nothing had changed since the
+last compaction, without adding anything in exchange. Fix: apply
+`compact_by_blocks` only as a deterministic pre-pass before the stochastic
+loop starts (`dag_compact` flag on `reduce_circuit`), and leave the loop
+itself untouched.
+
+At a short 8s budget, `dag_compact` is a consistent win in both gate sets
+(`scripts/diag_dag_maxlen.py`, 5 seeds × 4 `max_block_len` settings, length
+300). At the paper's own protocol budget (30s, 20 seeds,
+`scripts/benchmark_dag_compact.py`) the ion-trap win persists but shrinks;
+the NISQ win — already an order of magnitude smaller — washes out to noise:
+
+| gate set | budget | delta vs baseline | n |
+|---|---|---:|---|
+| ion trap (numeric path) | 8s | -7.6% mean (-4.5% to -10.0% range) | 5 seeds × 4 settings |
+| ion trap (numeric path) | 30s | **-3.6%** (68.5 → 66.1 mean) | 20 seeds |
+| NISQ | 8s | -1.1% mean (-0.2% to -1.7% range) | 5 seeds × 4 settings |
+| NISQ | 30s | **-0.1%** (151.8 → 151.6 mean, std ±13-14) | 20 seeds |
+
+That the win shrinks as budget grows is itself informative: `dag_compact`'s
+value is *reaching a given length faster*, not a better asymptote — given
+enough time, the baseline's own stochastic search (`transport_shuffle` +
+escape) partly catches up to what the deterministic pre-pass exposes on the
+first pass. On NISQ that catch-up is close to total by 30s.
+
+On **ion trap**, this improves the *numeric* lookup pipeline (`numeric_len`)
+— it is a different, weaker pipeline than the *exact* symplectic engine
+already reported in §2.1 (`exact_len`/`exact_cost`, 73.5/71.6 gates), which
+remains the strongest ion-trap result and is unaffected by this change. On
+**NISQ**, `numeric_len`/`numeric_cost` *is* the headline comparison against
+the paper (§2.2), so even the larger short-budget gain there was always
+modest — and at the standard 30s budget it is not distinguishable from
+baseline. That `dag_compact` finds far more candidate windows on NISQ too,
+yet the final length barely moves regardless of budget, is independent
+evidence for this report's existing diagnosis (§2.2): the NISQ gap is a
+**database factorization coverage** problem, not a window-discovery problem.
+Exposing more windows to a lookup database that already can't reduce most of
+them does not help; the open question remains what the paper's compute graph
+covers that ours does not.
+
 ## Setup and commands
 
 ```bash

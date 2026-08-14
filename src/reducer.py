@@ -513,6 +513,8 @@ def reduce_circuit(
     algebraic: bool = False,
     zx: bool = False,
     use_batched: bool = False,
+    dag_compact: bool = False,
+    dag_max_wires: int = 3,
 ) -> tuple[list[GateInstance], int, int]:
     """Strong reducer: cluster + collapse + sweep, transport shuffle, escape.
 
@@ -522,7 +524,12 @@ def reduce_circuit(
     fixpoint; ``cost_aware`` minimizes (two-qubit count, length);
     ``algebraic``/``zx`` enable the prepass rules (prepass.py);
     ``use_batched`` swaps the scalar sweep for the bit-identical batched
-    sweep (batched.py, scripts/check_batched_vs_scalar.py).
+    sweep (batched.py, scripts/check_batched_vs_scalar.py).  ``dag_compact``
+    deterministically reorders the circuit before each sweep so every
+    <=dag_max_wires-wire block becomes contiguous (dag.py), exposing windows
+    to the sweep that transport_shuffle only finds by chance; it is a valid
+    reordering of the circuit's dependency DAG, so it never changes the
+    unitary (scripts/check_dag_compact.py).
     Returns (reduced, passes, replacements).
     """
     rng = random.Random(seed)
@@ -558,10 +565,18 @@ def reduce_circuit(
     def done() -> bool:
         return time.time() - t0 > budget_s or passes >= max_passes
 
+    def compact(gates_list: list[GateInstance]) -> None:
+        if not dag_compact:
+            return
+        from .dag import compact_by_blocks
+
+        gates_list[:] = compact_by_blocks(gates_list, max_wires=dag_max_wires)
+
     cluster_single_qubit(working, num_qubits)
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
         reduced += rz_global_pass_fixpoint(working, one_wire)
+    compact(working)
     reduced += sweep_fn(working, num_qubits, db, max_block_len)
     if done():
         return working, passes, reduced
@@ -569,6 +584,7 @@ def reduce_circuit(
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
         reduced += rz_global_pass_fixpoint(working, one_wire)
+    compact(working)
     reduced += sweep_fn(working, num_qubits, db, max_block_len)
     if done():
         return working, passes, reduced
@@ -576,6 +592,14 @@ def reduce_circuit(
     stall = 0
     while not done():
         passes += 1
+        # dag_compact only runs as a deterministic pre-pass (above) and in
+        # the escape trial below; it is intentionally *not* called here.
+        # It is a pure function of the current gate list, so re-running it on
+        # an already-compacted, otherwise-unchanged list is a no-op -- which
+        # would silently displace transport_shuffle's randomized diversity
+        # (the main loop's actual source of escaping local optima) without
+        # adding anything back, on the (common) passes where nothing
+        # changed since the last compaction.
         transport_shuffle(working, num_qubits, rng, cache, direction=1 if passes % 2 else -1)
         if rz_pass:
             reduced += rz_global_pass_fixpoint(working, one_wire)
@@ -585,6 +609,7 @@ def reduce_circuit(
             found += reduce_single_wire_runs(working, one_wire)
             if rz_pass:
                 found += rz_global_pass_fixpoint(working, one_wire)
+            compact(working)
             found += sweep_fn(working, num_qubits, db, max_block_len)
         reduced += found
         if found == 0:
@@ -613,6 +638,7 @@ def reduce_circuit(
                 trial[start : start + length] = candidate
                 cluster_single_qubit(trial, num_qubits)
                 reduce_single_wire_runs(trial, one_wire)
+                compact(trial)
                 sweep_fn(trial, num_qubits, db, max_block_len)
                 if len(trial) < len(working):
                     working = trial

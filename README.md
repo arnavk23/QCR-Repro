@@ -118,6 +118,80 @@ comparison (baseline vs prepass vs prepass+batched, plus the paper's numbers):
 
 Outputs land in `results/prepass/` (`comparison_prepass_report.md/csv/json`).
 
+## DAG block-compaction (new, `src/dag.py`)
+
+The exhaustive sweep only ever finds a reduction if the gates it needs are
+*physically adjacent* in the flat gate list — otherwise it depends on
+`transport_shuffle`/`shuffle_commuting_pairs` happening to shuffle them next
+to each other. `src/dag.py` adds a deterministic alternative:
+`collect_wire_blocks`/`compact_by_blocks` build the circuit's true per-wire
+*dependency DAG* (a gate depends on the most recent gate touching each of its
+wires — the standard model) and reorder the gate list so every block of
+gates touching ≤3 wires becomes contiguous, generalizing the 2-qubit block
+collection used by production compilers (e.g. Qiskit's `Collect2qBlocks`) to
+k≤3-wire blocks. Any two gates that swap position under this reordering act
+on disjoint wires, so it is a valid topological order of the dependency DAG
+and preserves the circuit's unitary exactly — verified on random ion-trap
+and NISQ circuits plus adversarial edge cases (bridging blocks that must
+split, single-wire runs, empty circuits) in `scripts/check_dag_compact.py`.
+
+**A non-obvious pitfall.** The first integration attempt — re-running
+`compact_by_blocks` on every iteration of the existing stochastic search loop
+— made results *worse*, not better (ion trap −8% at equal budget, on top of
+weaker NISQ results too). Reason: `compact_by_blocks` is a pure function of
+the current gate list, so calling it again on an already-compacted,
+otherwise-unchanged list is a no-op. Interleaving it with
+`transport_shuffle` therefore silently displaced `transport_shuffle`'s
+*randomized* diversity — the search loop's actual mechanism for escaping
+local optima — on every pass where nothing had changed since the last
+compaction, without contributing anything back. The fix: run
+`compact_by_blocks` only as a deterministic **pre-pass**, before the
+stochastic loop starts, and leave the loop itself untouched (`dag_compact`
+flag on `reduce_circuit`, `src/reducer.py`).
+
+With that fix, `dag_compact` is an equal-time-budget win in both gate sets
+at short budgets; at the paper's own protocol budget the ion-trap win
+persists but shrinks, and the NISQ win — already small — washes out to
+noise:
+
+| gate set | budget | delta at equal budget | n |
+|---|---|---:|---|
+| ion trap (numeric path) | 8s | **−4.5% to −10.0%** (5 configs) | 5 seeds × 4 `max_block_len` settings |
+| ion trap (numeric path) | 30s (paper protocol) | **−3.6%** (68.5 → 66.1) | 20 seeds |
+| NISQ | 8s | **−0.2% to −1.7%** (4 configs) | 5 seeds × 4 `max_block_len` settings |
+| NISQ | 30s (paper protocol) | **−0.1%** (151.8 → 151.6, within ±13-14 std) | 20 seeds |
+
+That the win shrinks as the budget grows is itself the headline finding:
+`dag_compact`'s real value is *reaching a given length faster*, not a better
+asymptote — given enough time, `baseline`'s own stochastic search partly
+catches up to what the deterministic pre-pass exposes immediately. On NISQ
+that catch-up is close to total by 30s, consistent with the database-coverage
+diagnosis below: there's little headroom left to find once the database
+itself can't reduce most of what gets exposed.
+
+Two things to flag about scope, honestly:
+
+- On **ion trap**, this improves our *numeric* lookup pipeline (`numeric_len`
+  in the comparison scripts) — it does not change the already-stronger
+  **exact** symplectic-engine result (`exact_len`/`exact_cost`, 73.5/71.6
+  gates) that is the headline ion-trap comparison against the paper's 111.
+- On **NISQ**, `numeric_len`/`numeric_cost` *is* the headline comparison, so
+  this is a real (if small) improvement on the reported number — but it does
+  not close the gap (README "NISQ levers" / report §2.2). That the gain is an
+  order of magnitude smaller on NISQ than on ion trap is itself informative:
+  it's independent evidence *for* the existing diagnosis that the NISQ gap is
+  a **database factorization coverage** problem, not a window-discovery
+  problem — `dag_compact` finds substantially more candidate windows (mean
+  block length 6-14 gates vs the sweep's default 8-gate cap, up to 30-54 at
+  length 300, see `scripts/check_dag_compact.py` output), but on NISQ the
+  underlying lookup database still can't reduce most of them, so exposing
+  more windows barely moves the final length.
+
+Reproduce: `scripts/check_dag_compact.py` (correctness), `diag_dag_maxlen.py`
+(the `max_block_len` sweep above), `benchmark_dag_compact.py` (full
+baseline/prepass/dag/prepass+dag comparison with paper WIN/LOSE verdicts and
+t-tests, same protocol as `benchmark_comparison.py`).
+
 ## Paper protocol benchmark (numeric, tolerance-based)
 
 - `scripts/benchmark_demo_sweep.py` — depth/iteration/seed sweep on the demo circuit
