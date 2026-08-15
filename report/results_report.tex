@@ -31,8 +31,12 @@ versus the paper's 43; both differences are statistically significant
 On the NISQ gate set a gap remains ($160.5$ vs.\ the paper's 107). The inputs
 are composition-matched to the paper, yet we are able to \emph{rule out} input
 composition, database depth, time budget and the paper's own random-sampling
-loop as explanations; the residual gap is isolated to database factorization
-coverage on 3-wire blocks. All results reproduce on committed scripts and data.
+loop as explanations. We further introduce a dependency-graph based sweep
+extension (\emph{DAG block-compaction}) not present in the paper, and
+cross-check the NISQ diagnosis directly against the published method,
+ruling out two further candidate explanations; the residual gap is isolated
+to database factorization coverage on 3-wire blocks. All results reproduce
+on committed scripts and data.
 \end{abstract}
 
 \section{Summary of verdicts}
@@ -222,7 +226,23 @@ Best run: strict-valid 228 gates in 29.8\,s (depth 4, 1500 iterations, seed 10);
 loose-valid 226 gates in 2.4\,s. The loose metric accepts more replacements
 (eq.\ rate 1.000 vs.\ 0.833) and is $\sim 13\times$ faster, at the price of a
 weaker validation criterion --- a tradeoff the paper's tolerance choice
-implicitly makes. Figures~\ref{fig:motivation} and \ref{fig:pipeline} show the
+implicitly makes.
+
+The runs above all use the numeric port, matching the paper's own
+tolerance-based protocol; the exact symplectic engine (Section~\ref{sec:ion})
+was never applied to this specific demo circuit elsewhere in this report ---
+only to the random-circuit protocol of Tables 6/7. Doing so requires
+snapping the QASM file's 4-decimal-rounded angles (e.g.\ \texttt{ry(-1.5708)}
+for $-\pi/2$) to the pool's exact values first, since the exact engine's
+token lookup has no tolerance (\texttt{TokenPool.snap},
+\texttt{ANGLE\_EPS}=$10^{-3}$; verified not to change the represented
+unitary beyond the rounding already present in the QASM file). With that
+one fix, \texttt{reduce\_circuit\_exact} reduces the same 300-gate demo
+circuit to \textbf{102 gates} (best of 13 seeds, 15--45\,s budget each,
+exact-verified against the snapped input's unitary) --- more than $2\times$
+shorter than the numeric protocol's best of 226--228, and comparable to the
+$\sim$24\% ratio the exact engine reaches on the unrelated Table 6
+random-circuit protocol ($73.5/300$). Figures~\ref{fig:motivation} and \ref{fig:pipeline} show the
 reduction endpoints and the gate-composition change; Figures~\ref{fig:curve},
 \ref{fig:runtime} and \ref{fig:boxplot} show the convergence behaviour, the
 runtime--quality tradeoff, and the seed variance.
@@ -464,6 +484,150 @@ as well; the improvement from deepening is slow relative to the memory/build
 cost, consistent with diminishing returns at the graph frontier rather than a
 search-space limitation that more depth would break.
 
+\subsection{Pre-passes and the batched sweep}
+\label{sec:prepass}
+Two additions to the numeric pipeline shrink and accelerate the database
+loop without changing its results, both verified in
+\texttt{scripts/check\_batched\_vs\_scalar.py}. \emph{Algebraic/ZX
+pre-passes} (\texttt{src/prepass.py}) apply deterministic, search-free
+reductions before the database loop: adjacent same-axis rotation fusion
+(kept only when the sum snaps to a pool angle or cancels), CZ$\cdot$CZ
+cancellation, and, for NISQ, RZ-gathering across CZ so runs fuse. On
+Table-7-style NISQ inputs this removes about a quarter of the gates before
+any search begins; on ion-trap inputs (a pool of $\pm\pi/2$ rotations only)
+it removes the exact cancellations. The output stays pool-representable and
+the input unitary is preserved. The \emph{batched sweep}
+(\texttt{src/batched.py}) computes all window unitaries of a pass with
+batched matrix multiplication and vectorised phase normalisation instead of
+per-window Python matrix products; it is bit-identical to the scalar sweep
+and measures $1.5$--$1.7\times$ faster on the length-300 ion-trap fixpoint,
+with the per-window SHA-256 digest as the remaining floor.
+
+At a fixed per-circuit budget, the combined prepass-plus-batched pipeline
+ends with the same-or-better final lengths than the baseline (ion trap
+$89.5$ vs.\ $90.8$; NISQ $159.2$ vs.\ $161.7$) while spending less wall-clock
+per sweep; the ion-trap win over the paper's 111 gates is preserved. The
+batched sweep does not change which circuits are found, only how fast; the
+pre-passes make the input cheaper for the search that follows.
+
+\subsection{DAG block-compaction}
+\label{sec:dag}
+The exhaustive sweep only finds a reduction if the gates it needs are
+physically adjacent in the flat gate list; absent that, it depends on the
+stochastic \texttt{transport\_shuffle} pass bringing them together by
+chance. \texttt{src/dag.py} adds a deterministic alternative. It builds the
+circuit's per-wire dependency DAG --- a gate depends on the most recent gate
+touching each of its wires, the standard model --- and reorders the gate
+list so that every block of gates touching at most 3 wires becomes
+contiguous, generalising the 2-qubit block collection used by production
+compilers (e.g.\ Qiskit's \texttt{Collect2qBlocks}) to $k\leq 3$-wire
+blocks. Any two gates that swap position under this reordering act on
+disjoint wires and therefore commute, so the reordering is a valid
+topological order of the dependency DAG and preserves the circuit's unitary
+exactly; this is verified on random ion-trap and NISQ circuits together with
+adversarial edge cases (bridging blocks that must split, single-wire runs,
+empty circuits) in \texttt{scripts/check\_dag\_compact.py}. The resulting
+blocks average 6--14 gates and reach 30--54 gates at length 300, well past
+the sweep's default 8-gate window cap, so the sweep is exposed to
+substantially more candidate windows per pass than on the uncompacted
+circuit.
+
+A first integration attempt re-ran the compaction on every iteration of the
+existing stochastic loop, alongside \texttt{transport\_shuffle}. This made
+results \emph{worse} at equal budget (ion trap: mean $87.4$ vs.\ $83.3$
+gates over 7 seeds, length 300, 10\,s budget). The compaction is a pure
+function of the gate list, so re-running it on an unchanged,
+already-compacted list is a no-op; interleaving it with
+\texttt{transport\_shuffle} therefore displaced half of the loop's
+randomised-diversity passes --- the mechanism by which the loop escapes
+local optima --- on the common case where nothing had changed since the
+last compaction, without contributing anything in exchange. The fix is to
+run the compaction only as a deterministic pre-pass before the stochastic
+loop starts, leaving the loop itself unchanged (the \texttt{dag\_compact}
+flag on \texttt{reduce\_circuit}).
+
+With that fix, \texttt{dag\_compact} improves both gate sets at equal
+budget, with the effect largest at short budgets and shrinking toward the
+paper's own protocol length (Table~\ref{tab:dag}).
+
+\begin{table}[H]
+\centering
+\caption{\texttt{dag\_compact}: mean length at equal budget, baseline vs.\
+prepass+dag\_compact.}
+\label{tab:dag}
+\begin{tabular}{llrl}
+\toprule
+gate set & budget & $\Delta$ vs.\ baseline & $n$ \\
+\midrule
+ion trap (numeric path) & 8\,s  & $-4.5\%$ to $-10.0\%$ & 5 seeds $\times$ 4 \texttt{max\_block\_len} settings \\
+ion trap (numeric path) & 30\,s (paper protocol) & $-3.6\%$ ($68.5\to66.1$) & 20 seeds \\
+NISQ & 8\,s  & $-0.2\%$ to $-1.7\%$ & 5 seeds $\times$ 4 \texttt{max\_block\_len} settings \\
+NISQ & 30\,s (paper protocol) & $-0.1\%$ ($151.8\to151.6$, s.d.\ $\approx13$--14) & 20 seeds \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The shrinking effect with budget indicates that \texttt{dag\_compact}
+reaches a given length faster rather than reaching a better one: given
+enough time, the baseline's own stochastic search partly catches up to what
+the deterministic pre-pass exposes on the first pass. On NISQ that
+catch-up is close to complete by 30\,s.
+
+On ion trap, \texttt{dag\_compact} improves the numeric lookup pipeline
+(\texttt{numeric\_len}); it leaves the stronger exact symplectic-engine
+result (Section~\ref{sec:ion}) unchanged, since that pipeline does not use
+the numeric database. On NISQ, \texttt{numeric\_len}/\texttt{numeric\_cost}
+is the headline comparison, so the gain there is real but does not close
+the gap. The size difference between the two gate sets --- an order of
+magnitude larger on ion trap --- is independent evidence for the
+factorization-coverage diagnosis of Section~\ref{sec:summary2}:
+\texttt{dag\_compact} exposes substantially more candidate windows on NISQ
+too, but the underlying database cannot reduce most of them, so exposing
+more windows barely moves the final length.
+
+\subsection{Cross-check against the published method}
+\label{sec:crosscheck}
+The diagnosis in Section~\ref{sec:summary2} was checked directly against the
+published text (the open-access PDF, not only the abstract or a secondary
+summary). Compute-graph construction, the NISQ angle discretisation
+($\pm\pi/2,\pm\pi/4$), CZ token canonicalisation (dropping the redundant
+ordering, e.g.\ $CZ(2,1)$ given $CZ(1,2)$), and the $10^{-5}$
+replacement-acceptance tolerance all match our implementation exactly,
+ruling those out as sources of the gap independently of the ablations in
+Section~\ref{sec:summary2}.
+
+One implementation-specific hypothesis was tested and ruled out. The paper
+merges duplicate compute-graph nodes using a numerical tolerance
+($10^{-5}$) on the unitary comparison; \texttt{ComputeGraph} instead keys
+nodes by an exact hash of the phase-normalised unitary rounded to
+\texttt{digest\_decimals}=10, far tighter than $10^{-5}$. If floating-point
+noise on deeper chains pushed two genuinely-equal (up to global phase)
+unitaries to round differently at the tenth decimal, the graph would
+spuriously split one node into two, undercounting coverage in a way that
+would compound with depth --- consistent with the observation that
+deepening the NISQ database barely helps (Section~\ref{sec:deep}). Rebuilding
+the same NISQ compute graph at \texttt{digest\_decimals} $\in\{10,8,6,5,4\}$
+(\texttt{scripts/diag\_digest\_decimals.py}) produces exactly the same node
+count at every precision level tested, at 2 and 3 wires, depths 3--4: no
+measurable fragmentation. Double-precision floating-point error on these
+short, well-conditioned unitary products stays orders of magnitude below
+even a coarse $10^{-4}$ rounding threshold, so this mechanism does not apply
+to the implementation as built.
+
+One lever remains untested at the benchmark level. Every NISQ configuration
+used in this report, including the deep configuration of
+Section~\ref{sec:deep}, caps the 4-wire compute graph at depth 4, even
+though the paper's Table 7 circuits are exactly 4 qubits wide; a block
+spanning the full register can only be reduced by the 4-wire graph, at any
+depth. A depth-5 build (38-token pool) has been completed with the
+disk-backed builder: $167{,}449$ nodes at depth 4 (in-RAM and disk-backed
+builders agree exactly), growing to $1{,}912{,}349$ nodes at depth 5
+($39,\,830,\,12{,}958,\,167{,}449,\,1{,}912{,}349$ through depths 1--5; the
+depth-4-to-5 step alone took $1293$\,s of the $1342$\,s total build time).
+The graph exists but has not yet been wired into the deep configuration and
+re-run against the NISQ comparison; that integration and re-benchmark is
+the concrete next step for closing the remaining gap.
+
 \section{Where we beat the paper, and where the gap remains}
 \label{sec:summary2}
 The head-to-head verdicts are summarised in Section~\ref{sec:summary},
@@ -493,18 +657,36 @@ Sections~\ref{sec:nisq}--\ref{sec:deep} rule out four candidate explanations:
           V2/V3 loop reaches only $\approx 168$ at equal budget, and RF-gating
           makes it worse (Section~\ref{sec:sampling}).
 \end{enumerate}
+Two further candidates are ruled out by Sections~\ref{sec:dag} and
+\ref{sec:crosscheck}:
+\begin{enumerate}
+    \setcounter{enumi}{4}
+    \item \emph{Not window discovery.} \texttt{dag\_compact}
+          (Section~\ref{sec:dag}) exposes substantially more candidate windows
+          per sweep, yet moves the NISQ mean by only $-0.1\%$ at the paper's
+          protocol budget, against $-3.6\%$ on ion trap under the same
+          treatment --- the database, not the search, is the bottleneck.
+    \item \emph{Not node-key precision.} Coarsening the compute graph's node
+          deduplication precision from 10 decimals to 4 leaves the node count
+          unchanged at every depth tested (Section~\ref{sec:crosscheck}); our
+          exact hashing is not fragmenting the graph relative to the paper's
+          tolerance-based merging.
+\end{enumerate}
 The residual gap therefore sits in \emph{database factorization coverage}: the
 paper's compute graph supports block-shortening rewrites that ours does not
 find, concentrated in single-qubit rotations (RZ $42.3$ vs.\ $19$, RX $68.3$
-vs.\ $45$) and two-qubit gates (CZ $50.3$ vs.\ $43$). This is falsifiable: the
-next experiment is to compare per-block reducibility rates and graph node
-counts against the paper's Table 1, and to instrument which windows our
-database fails to shorten.
+vs.\ $45$) and two-qubit gates (CZ $50.3$ vs.\ $43$). One candidate remains
+untested at the benchmark level: the 4-wire compute graph, capped at depth
+4 in every configuration used here, structurally cannot reduce
+full-register-width blocks regardless of depth. A depth-5 build has been
+completed but not yet wired into a re-benchmark
+(Section~\ref{sec:crosscheck}).
 
 \section{Levers implemented to close the NISQ gap}
 \label{sec:levers}
 Four levers are implemented and opt-in from
-\texttt{scripts/benchmark\_comparison.py}:
+\texttt{scripts/benchmark\_comparison.py}; a fifth is scoped but not yet
+run (Section~\ref{sec:crosscheck}):
 \begin{itemize}
     \item \texttt{--rf-gate}: the paper's V3 idea --- an exact memo cache of
           already-tried blocks plus a lazily-trained RandomForest (sklearn,
@@ -552,6 +734,14 @@ Four levers are implemented and opt-in from
     \item All runs were executed on a single laptop (8 cores, 16\,GB RAM);
           results carry the stochastic variance of the search, reported as
           means $\pm$ std.\ over 100 circuits.
+    \item The \texttt{dag\_compact} results of Section~\ref{sec:dag} use 5
+          and 20 seeds, not the 100-circuit protocol used elsewhere in this
+          report, and a simplified pipeline (no hybrid or RF-gate levers).
+          They establish the sign and rough size of the effect, not a
+          publication-grade estimate at the full protocol scale.
+    \item The depth-5 4-wire compute graph (Section~\ref{sec:crosscheck}) has
+          been built ($1{,}912{,}349$ nodes) but not yet wired into the NISQ
+          comparison; the corresponding re-benchmark has not been run.
 \end{itemize}
 
 \section{Conclusion}
@@ -562,29 +752,333 @@ two-qubit gate counts, with exact (tolerance-free) verification and a
 cost-aware two-qubit objective the paper defers to future work; the win is
 statistically significant. On the NISQ gate set a significant gap remains.
 Inputs are composition-matched and qiskit baselines reproduce the paper's, so
-the protocol is fair; we then rule out database depth, time budget and the
-paper's own random-sampling loop (with and without RF gating) as explanations.
-The gap is isolated to database factorization coverage on 3-wire blocks --- a
-concrete, falsifiable target for the next experiment. All results are
-reproducible from committed scripts and data.
+the protocol is fair; we then rule out database depth, time budget, the
+paper's own random-sampling loop (with and without RF gating), window
+discovery, and node-key precision as explanations, the last two by direct
+cross-check against the published method (Sections~\ref{sec:dag},
+\ref{sec:crosscheck}). The gap is isolated to database factorization
+coverage on 3-wire blocks. One concrete, scoped lever remains open: a
+deeper 4-wire compute graph has been built but not yet integrated into the
+NISQ comparison. All results are reproducible from committed scripts and
+data.
 
-\section*{Reproduction}
-\label{sec:repro}
-\begin{verbatim}
-python -m pip install -e . ".[baselines]"     # qiskit/bqsikit for baselines
-python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 100 --budget 30
-python scripts/benchmark_comparison.py --gateset nisq    --num-circuits 100 --budget 60
-python scripts/benchmark_comparison.py --gateset nisq \
-    --num-circuits 100 --budget 60 --deep
-python scripts/benchmark_rf_sampling.py --num-circuits 6 --budget 10
-python scripts/check_levers.py
-python scripts/check_batched_vs_scalar.py
-python scripts/generate_figures.py
-\end{verbatim}
-Committed runs use seeds 0--99 (\texttt{--seed-base 0}); the qiskit baseline
-columns assume qiskit 2.5 with default transpiler seeding. All cited numbers
-live under \texttt{results/} (per-protocol CSVs and reports); figures
-regenerate into \texttt{figures/}.
+
+\clearpage
+\appendix
+
+\section{Tables from the paper}
+\label{sec:apptables}
+Reproduced from Rosenhahn, Osborne and Hirche, \emph{Optimization driven
+quantum circuit reduction}, New J.\ Phys.\ 27, 104509 (2025), under CC BY
+4.0, for direct reference alongside the results above. Arrows ($\downarrow$)
+indicate the optimization objective (fewer gates is better); ``Q-L*'' and
+``B-L*'' are qiskit and BQSKit optimization levels; ``Ours'' is the paper's
+method.
+
+\begin{table}[H]
+\centering
+\caption{Paper Table 1. Full compute graphs for different depths and
+numbers of operators (generic illustration, \S2.2; not tied to a specific
+experimental gate set).}
+\begin{tabular}{rrrrr}
+\toprule
+Qubits & \#Operators & Depth & Nodes & Edges \\
+\midrule
+2 & 14 & 1 & 15 & 14 \\
+2 & 14 & 2 & 114 & 210 \\
+2 & 14 & 3 & 584 & 1{,}596 \\
+2 & 14 & 4 & 2{,}024 & 8{,}176 \\
+2 & 14 & 5 & 4{,}512 & 28{,}336 \\
+2 & 14 & 6 & 7{,}420 & 63{,}168 \\
+3 & 24 & 1 & 25 & 24 \\
+3 & 24 & 2 & 337 & 600 \\
+3 & 24 & 3 & 3{,}215 & 8{,}088 \\
+3 & 24 & 4 & 23{,}622 & 77{,}160 \\
+3 & 24 & 5 & 137{,}572 & 566{,}928 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Paper Table 2. Computation time of the three proposed methods
+over 100 randomly generated quantum circuits (\S4.1).}
+\begin{tabular}{lrrr}
+\toprule
+ & V1-RS & V2-DR & V3-RF \\
+\midrule
+Mean & 199\,s & 55\,s & 38\,s \\
+Std.\ dev. & 351.5 & 96.3 & 39.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Paper Table 3. Ion-trap architecture, single example, 4 qubits.}
+\begin{tabular}{lrrrr}
+\toprule
+Method & \#RX$\downarrow$ & \#RY$\downarrow$ & \#RZ$\downarrow$ & \#RXX$\downarrow$ \\
+\midrule
+original & 82 & 71 & 86 & 61 \\
+Q-L1 & 36 & 43 & 63 & 61 \\
+Q-L2 & 41 & 48 & 58 & 60 \\
+Q-L3 & 41 & 48 & 58 & 60 \\
+B-L2 & 59 & 10 & 65 & 68 \\
+B-L3 & 54 & 9 & 72 & 59 \\
+B-L4 & 69 & 0 & 79 & 58 \\
+\textbf{Ours} & \textbf{9} & \textbf{27} & \textbf{38} & \textbf{38} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Paper Table 4. NISQ (IBM) architecture, single example, 6 qubits.}
+\begin{tabular}{lrrr}
+\toprule
+Method & \#RX$\downarrow$ & \#RZ$\downarrow$ & \#CZ$\downarrow$ \\
+\midrule
+original & 93 & 100 & 107 \\
+Q-L1 & 64 & 66 & 93 \\
+Q-L2 & 63 & 39 & 66 \\
+Q-L3 & 63 & 39 & 66 \\
+B-L2 & 82 & 100 & 94 \\
+B-L3 & 84 & 111 & 68 \\
+B-L4 & 90 & 132 & 60 \\
+\textbf{Ours} & \textbf{51} & \textbf{22} & \textbf{60} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Paper Table 5. NISQ (IBM) architecture, single example, 15 qubits.}
+\begin{tabular}{lrrr}
+\toprule
+Method & \#RX$\downarrow$ & \#RZ$\downarrow$ & \#CZ$\downarrow$ \\
+\midrule
+original & 96 & 91 & 313 \\
+Q-L1 & 74 & 74 & 285 \\
+Q-L2 & 74 & 36 & 203 \\
+Q-L3 & 74 & 36 & 203 \\
+B-L2 & 87 & 112 & 306 \\
+B-L3 & 126 & 164 & 269 \\
+B-L4 & 293 & 395 & 253 \\
+\textbf{Ours} & \textbf{72} & \textbf{26} & \textbf{191} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Paper Table 6. Ion-trap architecture, 100 runs, 4 qubits
+(mean $\pm$ std.). Compare to Table~\ref{tab:ion} above.}
+\begin{tabular}{lrrrr}
+\toprule
+Method & \#RX$\downarrow$ & \#RY$\downarrow$ & \#RZ$\downarrow$ & \#RXX$\downarrow$ \\
+\midrule
+In & 78 ($\pm$7) & 83 ($\pm$8) & 78 ($\pm$7) & 59 ($\pm$7) \\
+Q-L1 & 32 ($\pm$5) & 46 ($\pm$4) & 59 ($\pm$5) & 59 ($\pm$7) \\
+Q-L2 & 33 ($\pm$6) & 49 ($\pm$4) & 66 ($\pm$9) & 56 ($\pm$8) \\
+Q-L3 & 33 ($\pm$6) & 49 ($\pm$5) & 66 ($\pm$9) & 56 ($\pm$8) \\
+B-L2 & 49 ($\pm$10) & 2 ($\pm$2) & 66 ($\pm$15) & 37 ($\pm$6) \\
+B-L3 & 39 ($\pm$8) & 1 ($\pm$1) & 57 ($\pm$11) & 32 ($\pm$7) \\
+B-L4 & 40 ($\pm$7) & 0 ($\pm$0) & 58 ($\pm$19) & 28 ($\pm$4) \\
+\textbf{Ours (paper)} & \textbf{10 ($\pm$3)} & \textbf{29 ($\pm$6)} & \textbf{29 ($\pm$5)} & \textbf{43 ($\pm$8)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Paper Table 7. NISQ (IBM) architecture, 100 runs, 4 qubits
+(mean $\pm$ std.). Compare to Table~\ref{tab:nisq} above.}
+\begin{tabular}{lrrr}
+\toprule
+Method & \#RX$\downarrow$ & \#RZ$\downarrow$ & \#CZ$\downarrow$ \\
+\midrule
+In & 108 ($\pm$9) & 109 ($\pm$8) & 82 ($\pm$8) \\
+Q-L1 & 59 ($\pm$5) & 68 ($\pm$5) & 69 ($\pm$7) \\
+Q-L2 & 59 ($\pm$6) & 39 ($\pm$4) & 51 ($\pm$6) \\
+Q-L3 & 59 ($\pm$5) & 39 ($\pm$4) & 51 ($\pm$6) \\
+B-L2 & 67 ($\pm$7) & 85 ($\pm$11) & 62 ($\pm$8) \\
+B-L3 & 55 ($\pm$10) & 70 ($\pm$14) & 39 ($\pm$8) \\
+B-L4 & 56 ($\pm$10) & 75 ($\pm$15) & 37 ($\pm$7) \\
+\textbf{Ours (paper)} & \textbf{45 ($\pm$6)} & \textbf{19 ($\pm$4)} & \textbf{43 ($\pm$6)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\clearpage
+\section{Figures from the paper}
+\label{sec:appfigures}
+Reproduced from Rosenhahn, Osborne and Hirche (2025), CC BY 4.0, cropped
+directly from the published PDF.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure1_motivation.png}
+    \caption{Paper Figure 1. Motivation: the circuit to produce a Bell
+    state (H then CNOT), naively mapped to an ion-trap gate set (left)
+    versus a resource-efficient equivalent (right).}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure2_compute_graphs.png}
+    \caption{Paper Figure 2. Compute graphs of depth 1--4 (upper left to
+    lower right) for a provided set of available quantum operators.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure3_variants.png}
+    \caption{Paper Figure 3. The three optimization variants: V1 (random
+    search), V2 (database retrieval), V3 (random-forest-gated database
+    retrieval).}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure4_example_steps.png}
+    \caption{Paper Figure 4. Example optimization steps for a 40-gate
+    input circuit down to a substantially reduced circuit.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure5_reduction_vs_time.png}
+    \caption{Paper Figure 5. Circuit length vs.\ computation time for V1,
+    V2 and V3, reducing a 100-gate circuit toward $\sim$50 gates.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure6_boxplot_methods.png}
+    \caption{Paper Figure 6. Computation-time distribution of V1, V2, V3
+    over 100 randomly sampled circuits (data: Table 2 above).}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure7_wire_reduction.png}
+    \caption{Paper Figure 7. Scaling principle: wire reduction, code
+    reduction on the reduced-width subspace, then wire lift back to the
+    original register.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure8_boxplot_iontrap.png}
+    \caption{Paper Figure 8. Ion-trap architecture: gate counts for
+    qiskit (Q-L1--L3), BQSKit (B-L2--L4) and the paper's method, 100 runs
+    (data: Table 6 above).}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure9_boxplot_nisq.png}
+    \caption{Paper Figure 9. NISQ architecture: gate counts for qiskit,
+    BQSKit and the paper's method, 100 runs (data: Table 7 above).}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/paper_figure10_hardware.png}
+    \caption{Paper Figure 10. Measurement outcomes on two IBM Eagle r3
+    chips (Brisbane, Kyiv) compared to simulation, for equivalent long
+    (40-gate) and short (8-gate) circuits.}
+\end{figure}
+
+\clearpage
+\section{The same figures, on our own data and setup}
+\label{sec:appours}
+Analogs of Figures 1--9 in Appendix~\ref{sec:appfigures}, computed entirely
+from this repository's own runs, circuits and databases -- no numbers
+copied from the paper. Figure 10 (IBM hardware measurement) has no analog:
+this project has no quantum-hardware access, and nothing here is
+fabricated to stand in for it. Generated by
+\texttt{scripts/generate\_our\_paper\_figures.py}.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/our_figure1_4_example_reduction.png}
+    \caption{Our Figures 1 and 4 analog. A random 16-gate ion-trap circuit
+    (seed 7), reduced to 6 gates by our exact reducer
+    (\texttt{reduce\_circuit\_exact}, 5\,s budget), verified
+    unitary-equivalent to machine precision.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{../figures/our_figure2_compute_graph_growth.png}
+    \caption{Our Figure 2 analog. Measured node counts for our own
+    \texttt{ComputeGraph} at increasing depth, for both gate sets at 2 and
+    3 wires (log scale) -- not the paper's Table 1 values.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\linewidth]{../figures/our_figure3_pipeline.png}
+    \caption{Our Figure 3 analog. The \texttt{reduce\_circuit} pipeline
+    (\texttt{src/reducer.py}): pre-pass, clustering, exhaustive database
+    sweep, \texttt{dag\_compact}/transport shuffle, and escape, iterated to
+    a fixpoint or budget.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{../figures/our_figure5_reduction_vs_time.png}
+    \caption{Our Figure 5 analog. Length vs.\ computation time for the
+    exhaustive sweep and our reimplementations of the paper's V2 (random
+    sampling) and V3 (RF-gated) loops, on a single 100-gate ion-trap
+    circuit. Unlike the paper's Figure 5, our exhaustive sweep is the
+    strongest of the three, not the weakest -- consistent with
+    Section~\ref{sec:sampling}'s finding that the paper's loop structure
+    does not explain its advantage on this implementation.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{../figures/our_figure6_boxplot_methods.png}
+    \caption{Our Figure 6 analog. Wall-clock time distribution for the
+    three loop variants, $n=12$ circuits, 15\,s budget cap each. All three
+    consistently use the full budget rather than converging early -- a
+    genuine contrast with the paper's Figure 6, where V2 and V3 finish in
+    a fraction of V1's time. This is expected: our loops keep searching
+    (transport shuffle, escape moves) until the budget is exhausted rather
+    than stopping once no further reduction is found in a fixed number of
+    tries.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\linewidth]{../figures/our_figure7_wire_reduction.png}
+    \caption{Our Figure 7 analog. A real 4-gate, 3-active-wire block from a
+    5-wire register, remapped to local coordinates, looked up, and lifted
+    back (\texttt{ReductionDatabase.try\_reduce}) -- the same
+    wire-reduction mechanism the paper describes conceptually, shown here
+    on actual gates.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{../figures/our_figure8_boxplot_iontrap.png}
+    \caption{Our Figure 8 analog. Ion-trap gate counts from the committed
+    100-circuit comparison run
+    (\texttt{results/comparison/comparison\_ion\_trap.csv}): input, qiskit
+    L1--L3, and our exact reducer (length- and cost-objective).}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{../figures/our_figure9_boxplot_nisq.png}
+    \caption{Our Figure 9 analog. NISQ gate counts from the committed
+    100-circuit comparison run
+    (\texttt{results/comparison/comparison\_nisq.csv}): input, qiskit
+    L1--L3, and our numeric reducer (length- and cost-objective).}
+\end{figure}
 
 \begin{thebibliography}{9}
 \bibitem{Rosenhahn2025Optimization}
