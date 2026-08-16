@@ -1,0 +1,17 @@
+method,seed,start,end,runtime_s,ok,verifier,twq,RX,RY,RZ,RXX,CZ
+numeric_cost,0,300,167,20.332,True,numeric-1e-5,54,73,0,40,0,54
+numeric_cost,1,300,179,21.729,True,numeric-1e-5,54,73,0,52,0,54
+numeric_cost,2,300,186,21.661,True,numeric-1e-5,54,80,0,52,0,54
+numeric_cost,3,300,158,21.616,True,numeric-1e-5,44,66,0,48,0,44
+numeric_cost,4,300,160,20.149,True,numeric-1e-5,55,71,0,34,0,55
+numeric_cost,5,300,159,22.35,True,numeric-1e-5,52,64,0,43,0,52
+numeric_cost,6,300,152,25.359,True,numeric-1e-5,50,62,0,40,0,50
+numeric_cost,7,300,141,21.507,True,numeric-1e-5,46,58,0,37,0,46
+numeric_len,0,300,165,20.95,True,numeric-1e-5,54,73,0,38,0,54
+numeric_len,1,300,175,21.012,True,numeric-1e-5,53,71,0,51,0,53
+numeric_len,2,300,186,25.927,True,numeric-1e-5,54,80,0,52,0,54
+numeric_len,3,300,158,21.736,True,numeric-1e-5,44,66,0,48,0,44
+numeric_len,4,300,164,21.155,True,numeric-1e-5,58,69,0,37,0,58
+numeric_len,5,300,161,20.261,True,numeric-1e-5,53,65,0,43,0,53
+numeric_len,6,300,152,26.863,True,numeric-1e-5,50,62,0,40,0,50
+numeric_len,7,300,139,20.815,True,numeric-1e-5,45,56,0,38,0,45

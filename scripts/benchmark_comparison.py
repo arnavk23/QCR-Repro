@@ -268,12 +268,14 @@ def _worker(args):
         verifier = "exact"
         secs = stats.runtime_sec  # excludes DB load, like the numeric path below
     else:
-        # SQLite-backed databases are re-opened in each worker (forked
-        # processes must not share a parent's SQLite connection).
-        if backend == "sqlite":
-            db = load_or_build_database(gateset, depths, backend="sqlite")
-        else:
-            db = _load_db("numeric", gateset, depths, "ram")
+        # SQLite-backed databases open their own connections per worker
+        # process (forked processes must not share a parent's SQLite
+        # connection), but are cached per-process across tasks: _load_db's
+        # module-level cache is empty in a freshly forked child, so the
+        # first task on a given worker builds/loads it and every later task
+        # handled by that same (reused) worker process hits the cache
+        # instead of re-loading a multi-million-node graph from scratch.
+        db = _load_db("numeric", gateset, depths, backend)
         if hybrid:
             if gateset != "nisq":
                 raise ValueError("--hybrid is implemented for the NISQ pool only")

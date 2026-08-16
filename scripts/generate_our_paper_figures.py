@@ -356,7 +356,8 @@ def fig7_wire_reduction(db) -> None:
 
 
 def _boxplot_from_csv(csv_path: Path, methods_order: list[str], labels: list[str],
-                       title: str, out_name: str, input_len: int = 300) -> None:
+                       title: str, out_name: str, input_len: int = 300,
+                       num_ours: int = 1) -> None:
     if not csv_path.exists() or csv_path.stat().st_size == 0:
         print(f"  skip {out_name}: {csv_path} missing/empty")
         return
@@ -371,7 +372,7 @@ def _boxplot_from_csv(csv_path: Path, methods_order: list[str], labels: list[str
     fig, ax = plt.subplots(figsize=(8.5, 5))
     bp = ax.boxplot(data, labels=["Input"] + labels, patch_artist=True, widths=0.55)
     n = len(data)
-    colors = [INPUT_C] + [BASE_C] * (n - 2) + [OURS_C]
+    colors = [INPUT_C] + [BASE_C] * (n - 1 - num_ours) + [OURS_C] * num_ours
     for patch, color in zip(bp["boxes"], colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.45)
@@ -388,6 +389,7 @@ def fig8_boxplot_iontrap() -> None:
         ["Q-L1", "Q-L2", "Q-L3", "exact_len", "exact_cost"],
         "Our Figure 8 analog: ion-trap gate counts (committed 100-run data)",
         "our_figure8_boxplot_iontrap.png",
+        num_ours=2,
     )
 
 
@@ -398,6 +400,7 @@ def fig9_boxplot_nisq() -> None:
         ["Q-L1", "Q-L2", "Q-L3", "numeric_len", "numeric_cost"],
         "Our Figure 9 analog: NISQ gate counts (committed 100-run data)",
         "our_figure9_boxplot_nisq.png",
+        num_ours=2,
     )
 
 

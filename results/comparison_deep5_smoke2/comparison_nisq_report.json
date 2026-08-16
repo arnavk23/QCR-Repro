@@ -1,0 +1,83 @@
+{
+  "meta": {
+    "gateset": "nisq",
+    "num_circuits": 8,
+    "num_qubits": 4,
+    "length": 300,
+    "budget": 20.0,
+    "depths": {
+      "1": 14,
+      "2": 8,
+      "3": 6,
+      "4": 5
+    },
+    "max_block_len": 10,
+    "rz_pass": true,
+    "weights": {
+      "RX": 1.0,
+      "RZ": 1.0,
+      "CZ": 2.0
+    },
+    "restarts": 1,
+    "backend": "sqlite",
+    "rf_gate": false,
+    "hybrid": false,
+    "date": "2026-08-17 02:38:49",
+    "wall_sec": 238.0,
+    "with_numeric": false,
+    "method_order": [
+      "numeric_len",
+      "numeric_cost"
+    ]
+  },
+  "methods": {
+    "numeric_len": {
+      "n": 8,
+      "end_mean": 162.5,
+      "end_std": 13.238202294873727,
+      "end_best": 139,
+      "twq_mean": 51.375,
+      "twq_std": 4.470388685561916,
+      "counts": {
+        "RX": [
+          67.75,
+          6.8145065852195055
+        ],
+        "RZ": [
+          43.375,
+          5.743202503830071
+        ],
+        "CZ": [
+          51.375,
+          4.470388685561916
+        ]
+      },
+      "secs_mean": 22.33982002735138,
+      "ok_rate": 1.0
+    },
+    "numeric_cost": {
+      "n": 8,
+      "end_mean": 162.75,
+      "end_std": 13.48842096021621,
+      "end_best": 141,
+      "twq_mean": 51.125,
+      "twq_std": 3.8547859862773186,
+      "counts": {
+        "RX": [
+          68.375,
+          6.688376110835873
+        ],
+        "RZ": [
+          43.25,
+          6.339361166552983
+        ],
+        "CZ": [
+          51.125,
+          3.8547859862773186
+        ]
+      },
+      "secs_mean": 21.83783307671547,
+      "ok_rate": 1.0
+    }
+  }
+}
