@@ -403,7 +403,6 @@ Iteration-budgeted analogue of reduce_random_sampling, kept for the protocol ben
         raise ValueError("local_qubits must be >= 2")
 
     rng = random.Random(seed)
-    working = list(gates)
     commute_cache: dict = {}
     t0 = time.time()
     start_len = len(gates)
@@ -411,6 +410,7 @@ Iteration-budgeted analogue of reduce_random_sampling, kept for the protocol ben
     db = load_or_build_database(
         "ion_trap", {w: graph_depth for w in range(1, local_qubits + 1)}, verbose=False
     )
+    working = _snap_input_gates(gates, db)
 
     for _ in range(iterations):
         if len(working) < 2:

@@ -7,6 +7,7 @@ from pathlib import Path
 from qcr_repro.gates import circuit_unitary
 from qcr_repro.qasm import parse_qasm_subset, write_qasm_subset
 from qcr_repro.reducer import reduce_with_lookup
+from qcr_repro.token_pool import TokenPool
 from qcr_repro.unitary import equivalent_up_to_global_phase
 
 
@@ -27,7 +28,11 @@ def main() -> None:
     num_qubits, gates = parse_qasm_subset(in_path)
     print(f"Loaded {len(gates)} gates on {num_qubits} qubits from {in_path}")
 
-    start_u = circuit_unitary(num_qubits, gates)
+    # verify against the snapped reference, not the raw QASM unitary (see
+    # benchmark_demo_sweep.py for why: reduce_with_lookup snaps 4-decimal
+    # QASM angles to exact pool values before reducing).
+    snap_pool = TokenPool(num_qubits=1, gate_set="ion_trap")
+    start_u = circuit_unitary(num_qubits, [snap_pool.snap(gate) for gate in gates])
 
     t0 = time.time()
     reduced, stats = reduce_with_lookup(

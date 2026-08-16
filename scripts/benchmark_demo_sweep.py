@@ -9,6 +9,7 @@ from pathlib import Path
 from qcr_repro.gates import circuit_unitary
 from qcr_repro.qasm import parse_qasm_subset, write_qasm_subset
 from qcr_repro.reducer import reduce_with_lookup
+from qcr_repro.token_pool import TokenPool
 from qcr_repro.unitary import equivalent_up_to_global_phase
 
 
@@ -37,7 +38,14 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     num_qubits, input_gates = parse_qasm_subset(args.input)
-    input_u = circuit_unitary(num_qubits, input_gates)
+    # reduce_with_lookup snaps QASM's 4-decimal-rounded angles to the pool's
+    # exact values before reducing (TokenPool.snap); verify against that
+    # snapped reference rather than the raw QASM unitary, so the ~1e-4 QASM
+    # rounding artifact isn't mistaken for a reduction error (same
+    # convention used to validate the exact engine's demo-circuit result).
+    snap_pool = TokenPool(num_qubits=1, gate_set="ion_trap")
+    snapped_gates = [snap_pool.snap(gate) for gate in input_gates]
+    input_u = circuit_unitary(num_qubits, snapped_gates)
 
     rows: list[dict[str, object]] = []
 

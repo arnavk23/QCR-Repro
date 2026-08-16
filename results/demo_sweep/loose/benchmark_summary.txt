@@ -1,8 +1,8 @@
 Benchmark Summary
 Runs: 18
 Input gates: 300
-Best end_len: 226
-Mean end_len: 251.11
-Mean runtime_sec: 1.51
-Median runtime_sec: 1.50
+Best end_len: 210
+Mean end_len: 235.89
+Mean runtime_sec: 0.41
+Median runtime_sec: 0.39
 Equivalence pass rate: 1.000

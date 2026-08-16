@@ -23,6 +23,7 @@ from qcr_repro.reducer import reduce_with_lookup
 ROOT = Path(__file__).resolve().parents[1]
 STRICT_CSV = ROOT / "results" / "demo_sweep" / "strict" / "benchmark_reducer.csv"
 LOOSE_CSV = ROOT / "results" / "demo_sweep" / "loose" / "benchmark_reducer.csv"
+DEEP_CSV = ROOT / "results" / "demo_sweep" / "deep" / "benchmark_reducer.csv"
 LONG_QASM = ROOT / "matlab_demo" / "QCOptimDemo" / "longcode10.txt"
 SHORT_QASM = ROOT / "matlab_demo" / "QCOptimDemo" / "shortcode10.txt"
 COMPARISON_ION_CSV = ROOT / "results" / "comparison" / "comparison_ion_trap.csv"
@@ -45,6 +46,7 @@ PAPER_OURS = {
 PAPER_C = "#616161"      # paper reference
 INPUT_C = "#90a4ae"      # input circuits
 OURS_C = "#2e7d32"       # our reducers (length objective)
+DEEP_C = "#1b5e20"       # our reducers, larger iteration budget / deeper database
 COST_C = "#00838f"       # our reducers (cost-aware objective)
 BASE_C = "#c62828"       # baseline compilers (qiskit/BQSKit)
 GRID_C = "#d7d7d7"
@@ -110,7 +112,7 @@ def _csv_ok(path: Path) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def fig1_motivation(strict_rows, loose_rows):
+def fig1_motivation(strict_rows, loose_rows, deep_rows=()):
     """Endpoints of the demo-circuit runs, with % reduction labels."""
     _, long_gates = parse_qasm_subset(LONG_QASM)
     _, short_matlab = parse_qasm_subset(SHORT_QASM)
@@ -125,6 +127,13 @@ def fig1_motivation(strict_rows, loose_rows):
               "Long code (input)"]
     values = [int(best_loose["end_len"]), int(best_strict["end_len"]), len(short_matlab), long_n]
     colors = [COST_C, OURS_C, "#7a5c3e", INPUT_C]
+
+    deep_valid = [r for r in deep_rows if r["equivalent"] == "True"]
+    if deep_valid:
+        best_deep = min(deep_valid, key=lambda r: int(r["end_len"]))
+        labels.insert(2, "Python V2, deep (100k iters, depth 5)")
+        values.insert(2, int(best_deep["end_len"]))
+        colors.insert(2, DEEP_C)
 
     fig, ax = plt.subplots(figsize=(8.2, 4.6))
     bars = ax.barh(labels, values, color=colors, edgecolor="#333333", linewidth=0.6, height=0.62)
@@ -493,8 +502,9 @@ def main():
 
     strict_rows = load_rows(STRICT_CSV)
     loose_rows = load_rows(LOOSE_CSV)
+    deep_rows = load_rows(DEEP_CSV) if _csv_ok(DEEP_CSV) else []
 
-    fig1_motivation(strict_rows, loose_rows)
+    fig1_motivation(strict_rows, loose_rows, deep_rows)
     fig2_database_growth()
     fig3_gate_composition()
     fig4_reduction_curve()

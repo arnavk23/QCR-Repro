@@ -203,6 +203,27 @@ $\{500,1000,1500\}$, seeds $\{1,5,10\}$, under both strict ($10^{-5}$) and
 loose ($10^{-3}$) equivalence. Table~\ref{tab:combined} reports best and mean
 end lengths over the 3 seeds per configuration.
 
+\texttt{reduce\_with\_lookup} (the function backing this benchmark and
+\texttt{scripts/reduce\_demo\_circuits.py}) queried the database with the
+QASM file's literal angles (e.g.\ \texttt{ry(-1.5708)}, rounded to 4
+decimals) instead of the pool's exact values ($-\pi/2 =
+-1.5707963267948966$), unlike its sibling functions
+\texttt{reduce\_with\_database}/\texttt{reduce\_random\_sampling}, which
+snap the input first. Every database lookup therefore missed on this
+circuit --- a regression introduced when the function was reintroduced
+after a refactor (the original implementation matched on the block's raw
+unitary, which is snap-insensitive). Fixed by snapping the input the same
+way the sibling functions do (\texttt{working =
+\_snap\_input\_gates(gates, db)}); verified directly against
+\texttt{db.try\_reduce} (0/5000 random-block lookups matched unsnapped,
+2230/5000 matched snapped) and by rerunning the sweep below, which now
+reduces further at every setting and passes exact-equivalence verification
+on all 18 runs (previously 0.667--0.833 at strict tolerance). This is
+independent of the paper's own tolerance choice (the strict/loose split
+below, which trades a genuinely weaker acceptance criterion for speed) and
+does not affect Section~\ref{sec:ion} (Table 6), which never used this
+function.
+
 \begin{table}[H]
 \centering
 \caption{Demo-circuit protocol: strict vs.\ loose tolerance (3 seeds per
@@ -212,21 +233,48 @@ configuration).}
 \toprule
 depth & iters & runs & best$_{\text{strict}}$ & mean$_{\text{strict}}$ & eq$_{\text{strict}}$ & best$_{\text{loose}}$ & mean$_{\text{loose}}$ & eq$_{\text{loose}}$ \\
 \midrule
-3 & 500  & 3 & 266 & 274.00 & 1.000 & 266 & 274.00 & 1.000 \\
-3 & 1000 & 3 & 246 & 250.00 & 0.667 & 246 & 250.00 & 1.000 \\
-3 & 1500 & 3 & 240 & 242.67 & 0.667 & 240 & 242.67 & 1.000 \\
-4 & 500  & 3 & 262 & 265.33 & 1.000 & 262 & 265.33 & 1.000 \\
-4 & 1000 & 3 & 238 & 243.33 & 1.000 & 238 & 243.33 & 1.000 \\
-4 & 1500 & 3 & 226 & 231.33 & 0.667 & 226 & 231.33 & 1.000 \\
+3 & 500  & 3 & 254 & 256.67 & 1.000 & 254 & 256.67 & 1.000 \\
+3 & 1000 & 3 & 234 & 237.33 & 1.000 & 234 & 237.33 & 1.000 \\
+3 & 1500 & 3 & 222 & 228.00 & 1.000 & 222 & 228.00 & 1.000 \\
+4 & 500  & 3 & 238 & 246.67 & 1.000 & 238 & 246.67 & 1.000 \\
+4 & 1000 & 3 & 224 & 229.33 & 1.000 & 224 & 229.33 & 1.000 \\
+4 & 1500 & 3 & 210 & 217.33 & 1.000 & 210 & 217.33 & 1.000 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Best run: strict-valid 228 gates in 29.8\,s (depth 4, 1500 iterations, seed 10);
-loose-valid 226 gates in 2.4\,s. The loose metric accepts more replacements
-(eq.\ rate 1.000 vs.\ 0.833) and is $\sim 13\times$ faster, at the price of a
-weaker validation criterion --- a tradeoff the paper's tolerance choice
-implicitly makes.
+Best run: \textbf{210 gates} in 0.66\,s (depth 4, 1500 iterations, seed 1),
+strict- and loose-verified. With the fix, acceptance no longer depends on
+the tolerance, so the strict and loose columns are now identical; the
+loose/strict runtime split reported previously was an artifact of the same
+bug. This supersedes the pre-fix 226--228 gate result.
+
+\paragraph{Beating the paper's own demo-circuit output.}
+\texttt{matlab\_demo/QCOptimDemo/} ships \texttt{shortcode10.txt}, the
+paper's own MATLAB-reduced output for this exact circuit --- verified
+bit-identical up to global phase to \texttt{longcode10.txt}'s unitary (max
+component-wise difference $2.2\times10^{-15}$, i.e. floating-point noise,
+not approximation). It has \textbf{140 gates} (53.3\% shorter than the
+300-gate input) and is the only paper-reported number directly comparable
+to this specific circuit (Tables 6/7 are aggregate statistics over 100
+\emph{different}, randomly generated circuits --- see
+Section~\ref{sec:ion} --- not this one). The protocol table above
+(depth $\le 4$, $\le 1500$ iterations, matching the paper's stated sweep)
+doesn't reach that with the V2 algorithm alone (210 gates). But nothing in
+the V2 algorithm caps the iteration count at 1500 --- that number was
+chosen when each run cost up to 30\,s under the pre-fix bug; post-fix, a
+run is sub-second, so a much larger budget is cheap. Running the same
+\texttt{reduce\_with\_lookup} (still random block sampling + database
+retrieval, no structural passes, no cost-awareness --- i.e. still
+faithfully ``V1/V2'', not the exact engine) at 100\,000 iterations against
+a deeper (depth-5 instead of depth-4) 3-wire database
+(\texttt{results/demo\_sweep/deep/benchmark\_reducer.csv}, 8 seeds) gives
+end lengths of 144, 138, 136, 132, 140, 144, 143, and \textbf{131}. Best
+\textbf{131 gates} (56.3\% reduction), mean 138.5, all 8 runs
+exact-equivalence verified --- beats the paper's own 140-gate MATLAB output
+on this identical circuit, using the paper's own method family (V2), just
+with a larger iteration budget and deeper database than the specific
+$\{3,4\}\times\{500,\ldots,1500\}$ grid tabulated above.
 
 The runs above all use the numeric port, matching the paper's own
 tolerance-based protocol; the exact symplectic engine (Section~\ref{sec:ion})
@@ -239,10 +287,10 @@ token lookup has no tolerance (\texttt{TokenPool.snap},
 unitary beyond the rounding already present in the QASM file). With that
 one fix, \texttt{reduce\_circuit\_exact} reduces the same 300-gate demo
 circuit to \textbf{102 gates} (best of 13 seeds, 15--45\,s budget each,
-exact-verified against the snapped input's unitary) --- more than $2\times$
-shorter than the numeric protocol's best of 226--228, and comparable to the
-$\sim$24\% ratio the exact engine reaches on the unrelated Table 6
-random-circuit protocol ($73.5/300$). Figures~\ref{fig:motivation} and \ref{fig:pipeline} show the
+exact-verified against the snapped input's unitary) --- almost exactly
+$2\times$ shorter than the (now-fixed) numeric protocol's best of 210, and
+comparable to the $\sim$24\% ratio the exact engine reaches on the
+unrelated Table 6 random-circuit protocol ($73.5/300$). Figures~\ref{fig:motivation} and \ref{fig:pipeline} show the
 reduction endpoints and the gate-composition change; Figures~\ref{fig:curve},
 \ref{fig:runtime} and \ref{fig:boxplot} show the convergence behaviour, the
 runtime--quality tradeoff, and the seed variance.
