@@ -1,6 +1,11 @@
-"""Exact/numeric hybrid lookup for NISQ pools.
+"""Exact/numeric hybrid lookup for mixed Clifford/non-Clifford pools.
 
-Routes fully-Clifford windows (RX/RZ at +/-pi/2, CZ) to the exact symplectic engine and everything else to the numeric database -- deep exact reduction where possible, numeric fallback elsewhere."""
+Routes fully-Clifford windows (single-qubit RX/RY/RZ at +/-pi/2, CZ, or RXX
+at +/-pi/2) to the exact symplectic engine and everything else to the
+numeric database -- deep exact reduction where possible, numeric fallback
+elsewhere. Gate-set-agnostic: the same routing rule covers both NISQ
+(RX/RZ/CZ) and the mixed ion-trap pool (RX/RY/RZ/RXX), since it checks
+angles rather than assuming a fixed set of gate names."""
 
 from __future__ import annotations
 
@@ -9,14 +14,17 @@ import math
 from .config import GateInstance
 
 _CLIFFORD_ANGLES = (math.pi / 2, -math.pi / 2)
+_ANGLED_SINGLE_QUBIT = ("RX", "RY", "RZ")
+_ANGLED_TWO_QUBIT = ("RXX",)  # Clifford only at +/-pi/2; CZ is unconditionally Clifford (no angle)
 
 
 def is_clifford_window(block: list[GateInstance], atol: float = 1e-6) -> bool:
-    """True if every gate in block is in the Clifford sub-pool (RX/RZ at +/-pi/2, or CZ)."""
+    """True if every gate in block is Clifford: CZ (always), or RX/RY/RZ/RXX
+    at +/-pi/2."""
     for gate in block:
         if gate.name == "CZ":
             continue
-        if gate.name in ("RX", "RZ"):
+        if gate.name in _ANGLED_SINGLE_QUBIT or gate.name in _ANGLED_TWO_QUBIT:
             if gate.theta is None:
                 return False
             if not any(abs(gate.theta - a) <= atol for a in _CLIFFORD_ANGLES):

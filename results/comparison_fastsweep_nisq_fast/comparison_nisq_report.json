@@ -1,0 +1,84 @@
+{
+  "meta": {
+    "gateset": "nisq",
+    "num_circuits": 100,
+    "num_qubits": 4,
+    "length": 300,
+    "budget": 60.0,
+    "depths": {
+      "1": 12,
+      "2": 6,
+      "3": 5,
+      "4": 4
+    },
+    "max_block_len": 10,
+    "rz_pass": true,
+    "weights": {
+      "RX": 1.0,
+      "RZ": 1.0,
+      "CZ": 2.0
+    },
+    "restarts": 1,
+    "backend": "ram",
+    "rf_gate": false,
+    "hybrid": false,
+    "fast_sweep": true,
+    "date": "2026-09-08 15:40:27",
+    "wall_sec": 1708.6,
+    "with_numeric": false,
+    "method_order": [
+      "numeric_len",
+      "numeric_cost"
+    ]
+  },
+  "methods": {
+    "numeric_len": {
+      "n": 100,
+      "end_mean": 159.31,
+      "end_std": 12.626713745072388,
+      "end_best": 131,
+      "twq_mean": 50.1,
+      "twq_std": 5.627610505356603,
+      "counts": {
+        "RX": [
+          67.73,
+          5.890424432925016
+        ],
+        "RZ": [
+          41.48,
+          4.980923609131142
+        ],
+        "CZ": [
+          50.1,
+          5.627610505356603
+        ]
+      },
+      "secs_mean": 60.57611284971237,
+      "ok_rate": 1.0
+    },
+    "numeric_cost": {
+      "n": 100,
+      "end_mean": 160.61,
+      "end_std": 12.458647599157784,
+      "end_best": 131,
+      "twq_mean": 49.75,
+      "twq_std": 5.7102977155311265,
+      "counts": {
+        "RX": [
+          68.57,
+          5.699570159231309
+        ],
+        "RZ": [
+          42.29,
+          5.150330086509019
+        ],
+        "CZ": [
+          49.75,
+          5.7102977155311265
+        ]
+      },
+      "secs_mean": 61.05148532867432,
+      "ok_rate": 1.0
+    }
+  }
+}

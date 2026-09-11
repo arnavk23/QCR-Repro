@@ -9,9 +9,12 @@ On the ion-trap (all-Clifford) gate set, a bit-exact signed-symplectic
 engine plus a two-qubit-aware search objective beats the published result.
 On the NISQ gate set a gap remains; six candidate explanations for it are
 tested and ruled out in a systematic diagnostic study (`report/draft_paper.tex`).
-The repository also includes two extensions not in the original paper: a
-dependency-graph based block-reordering pass (`src/dag.py`) and a
-disk-backed compute-graph backend for databases too large to fit in RAM.
+The repository also includes extensions not in the original paper: a
+dependency-graph based block-reordering pass (`src/dag.py`), a
+disk-backed compute-graph backend for databases too large to fit in RAM,
+and an incremental per-window search construction that removes redundant
+from-scratch rebuilds in the sweep's hot loop, raising search throughput
+under the same time budget (`src/reducer.py`, `src/exact_reducer.py`).
 
 ## Results
 
@@ -20,7 +23,7 @@ across methods (`results/comparison/`):
 
 | Gate set | Published "Ours" | This work | Δ |
 |---|---:|---:|---:|
-| Ion trap (RX/RY/RZ/RXX) | 111 gates (43 RXX) | **71.6** gates (27.2 RXX) | −36% |
+| Ion trap (RX/RY/RZ/RXX) | 111 gates (43 RXX) | **66.7** gates (25.9 RXX) | −40% |
 | NISQ (RX/RZ/CZ) | 107 gates (43 CZ) | 160.5 gates (49.6 CZ) | gap remains |
 
 Both differences are statistically significant (p < 10⁻⁴⁵ and p < 10⁻⁶⁰
@@ -43,8 +46,7 @@ Requires Python ≥ 3.10.
 # smoke test
 python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 2 --budget 5 --no-baselines
 
-# full protocol (builds and caches lookup databases on first run)
-python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 100 --budget 30
+python scripts/benchmark_comparison.py --gateset ion_trap --num-circuits 100 --budget 30 --fast-sweep
 python scripts/benchmark_comparison.py --gateset nisq --num-circuits 100 --budget 60
 
 # regenerate all figures

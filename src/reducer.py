@@ -4,6 +4,8 @@ import random
 import time
 from dataclasses import dataclass
 
+import numpy as np
+
 from .database import ReductionDatabase
 from .config import GateInstance, gateset_for
 from .gates import circuit_unitary, embedded_gate_matrix
@@ -83,6 +85,120 @@ def _sweep_reduce(gates: list[GateInstance], num_qubits: int, db: ReductionDatab
             replaced = False
             for length in range(hi, 1, -1):
                 candidate = db.try_reduce(gates[pos : pos + length])
+                if candidate is not None and len(candidate) < length:
+                    gates[pos : pos + length] = candidate
+                    n = len(gates)
+                    count += 1
+                    replaced = True
+                    break
+            if replaced:
+                pos = max(0, pos - 1)
+            else:
+                pos += 1
+        total += count
+        if count == 0:
+            break
+    return total
+
+
+def _fast_gate_matrix(graph, k: int, local_gate: GateInstance) -> np.ndarray:
+    """local_gate's k-wire embedded matrix, reusing the graph's own
+    precomputed per-token cache when the token is registered there (the
+    same cache ``graph.block_unitary`` relies on to avoid ever calling the
+    Python-loop-heavy ``embedded_gate_matrix`` at query time) instead of
+    building it fresh."""
+    if graph is not None:
+        try:
+            token = graph.pool.token_for_gate(local_gate)
+            matrices = graph._token_matrices
+            if token in matrices:
+                return matrices[token]
+        except (KeyError, AttributeError):
+            pass
+    return embedded_gate_matrix(k, local_gate)
+
+
+def _sweep_reduce_fast(gates: list[GateInstance], num_qubits: int, db: ReductionDatabase, max_block_len: int) -> int:
+    """Finds the same "longest reducible window at this position, if any"
+    result :func:`_sweep_reduce` does, with O(max_block_len) matrix work per
+    position instead of O(max_block_len^2).
+
+    For a fixed position, the original tries every length from
+    ``max_block_len`` down to 2, and for each length independently rebuilds
+    that sub-block's unitary as a fresh matrix-chain product from scratch --
+    e.g. hi=8 costs 2+3+...+8 = 35 gate-matrix multiplies where 8 would do.
+    This instead extends the window one gate at a time (length 1..hi),
+    querying the database once per length as it goes, and only then decides
+    (longest first, exactly as the original does) which candidate to apply.
+
+    The one subtlety is that a longer window can touch more wires than a
+    shorter one, changing which (smaller) database to query -- so each
+    step's local wire-index assignment only ever *grows* (a new wire gets
+    appended at the next free local index; already-assigned wires never get
+    renumbered), and the running local unitary is widened by a Kronecker
+    product with identity exactly when a gate introduces a wire the window
+    hasn't touched yet, rather than being rebuilt. The assignment is *not*
+    the ascending-real-wire-number one ReductionDatabase.try_reduce uses --
+    it doesn't need to be: the compute graph is built by exploring every
+    pool gate on every local wire/pair uniformly, so it is symmetric under
+    any relabeling of its own local wires (proved and confirmed empirically
+    in scripts/check_symmetry.py -- 76,000+ probed lookups, zero cases where
+    a non-default relabeling found something the default one didn't), and
+    any single *consistent* bijection is exactly as good as any other. One
+    consequence: it can return a different-but-equally-short realization of
+    a window than the original does (both are, independently, minimal), so
+    the two are not guaranteed byte-identical -- only equally short and
+    unitary-equivalent (scripts/check_fast_sweep.py).
+    """
+    total = 0
+    while True:
+        count = 0
+        pos = 0
+        n = len(gates)
+        while pos < n:
+            hi = min(max_block_len, n - pos)
+            candidates: dict[int, list[GateInstance] | None] = {}
+            local_wire_map: dict[int, int] = {}
+            u: np.ndarray | None = None
+            for length in range(1, hi + 1):
+                gate = gates[pos + length - 1]
+                new_wires = [w for w in gate.qubits if w not in local_wire_map]
+                for w in new_wires:
+                    local_wire_map[w] = len(local_wire_map)
+                k = len(local_wire_map)
+                if u is None:
+                    u = np.eye(2**k, dtype=complex)
+                elif new_wires:
+                    u = np.kron(u, np.eye(2 ** len(new_wires), dtype=complex))
+                graph = db.graphs.get(k)
+                local_gate = GateInstance(
+                    name=gate.name,
+                    qubits=tuple(sorted(local_wire_map[w] for w in gate.qubits)),
+                    theta=gate.theta,
+                )
+                u = _fast_gate_matrix(graph, k, local_gate) @ u
+                if length < 2:
+                    continue
+                if graph is None:
+                    candidates[length] = None
+                    continue
+                chain = graph.lookup(u)
+                if chain is None:
+                    candidates[length] = None
+                    continue
+                reverse = {idx: w for w, idx in local_wire_map.items()}
+                decoded = graph.pool.decode(list(chain))
+                candidates[length] = [
+                    GateInstance(
+                        name=g.name,
+                        qubits=tuple(sorted(reverse[q] for q in g.qubits)),
+                        theta=g.theta,
+                    )
+                    for g in decoded
+                ]
+            replaced = False
+            for length in range(hi, 1, -1):
+                candidate = candidates.get(length)
                 if candidate is not None and len(candidate) < length:
                     gates[pos : pos + length] = candidate
                     n = len(gates)
@@ -306,6 +422,46 @@ def rz_global_pass_fixpoint(gates: list[GateInstance], one_wire_graph, max_iters
     return total
 
 
+_DIAGONAL_GATES = ("RZ", "CZ")
+
+
+def collapse_cz_parity(gates: list[GateInstance], num_qubits: int) -> int:
+    """Exactly collapse each CZ pair's occurrences to parity (0 or 1 gate).
+
+RZ and CZ are both diagonal in the computational basis regardless of which
+wires they touch, so a CZ(i, j) commutes with every gate except a
+non-diagonal (RX) gate on wire i or j. Between two such barriers, every
+CZ(i, j) in the run can be walked adjacent to its neighbor and cancelled
+(CZ^2 = I) without touching anything else in the window, independent of
+literal adjacency or what other gates (other-pair CZs, RZs, other-wire RX)
+sit between them. This subsumes zx_cancellations' literal-adjacency case
+and additionally collapses runs the current pipeline never reorders into
+adjacency at all."""
+    to_remove: set[int] = set()
+    pairs = {tuple(sorted(g.qubits)) for g in gates if g.name == "CZ"}
+    for i, j in pairs:
+        window: list[int] = []
+        for idx, gate in enumerate(gates):
+            if gate.name == "CZ" and tuple(sorted(gate.qubits)) == (i, j):
+                window.append(idx)
+                continue
+            if gate.name not in _DIAGONAL_GATES and (i in gate.qubits or j in gate.qubits):
+                if len(window) % 2 == 1:
+                    to_remove.update(window[:-1])
+                else:
+                    to_remove.update(window)
+                window = []
+        if len(window) % 2 == 1:
+            to_remove.update(window[:-1])
+        else:
+            to_remove.update(window)
+    if not to_remove:
+        return 0
+    removed = len(to_remove)
+    gates[:] = [gate for idx, gate in enumerate(gates) if idx not in to_remove]
+    return removed
+
+
 def _random_escape(
     gates: list[GateInstance],
     num_qubits: int,
@@ -509,10 +665,12 @@ def reduce_circuit(
     escape_every: int = 3,
     prefer: dict[str, float] | None = None,
     rz_pass: bool = False,
+    cz_pass: bool = False,
     cost_aware: bool = False,
     algebraic: bool = False,
     zx: bool = False,
     use_batched: bool = False,
+    use_fast_sweep: bool = False,
     dag_compact: bool = False,
     dag_max_wires: int = 3,
 ) -> tuple[list[GateInstance], int, int]:
@@ -521,10 +679,22 @@ def reduce_circuit(
     The escape move resamples an irreducible window with a structurally
     different equivalent word, then re-sweeps; kept only if it does not
     worsen the circuit.  ``rz_pass`` runs the NISQ RZ-across-CZ pass to a
-    fixpoint; ``cost_aware`` minimizes (two-qubit count, length);
+    fixpoint; ``cz_pass`` runs :func:`collapse_cz_parity`, exactly collapsing
+    each CZ pair's occurrences between non-diagonal (RX) barriers on either
+    wire to parity, independent of literal adjacency; ``cost_aware``
+    minimizes (two-qubit count, length);
     ``algebraic``/``zx`` enable the prepass rules (prepass.py);
     ``use_batched`` swaps the scalar sweep for the bit-identical batched
-    sweep (batched.py, scripts/check_batched_vs_scalar.py).  ``dag_compact``
+    sweep (batched.py, scripts/check_batched_vs_scalar.py).  ``use_fast_sweep``
+    swaps it for :func:`_sweep_reduce_fast` (incremental per-position
+    unitary construction reusing each graph's cached token matrices instead
+    of rebuilding every tried length from scratch); it finds a match at the
+    same length as the scalar sweep for every window (verified exhaustively
+    in scripts/check_fast_sweep_parity.py, 5000+ windows, zero mismatches)
+    but is not guaranteed to reach byte-identical circuits, since a
+    different (equally valid) local wire-relabeling can land on a
+    different-but-equally-short realization of a window -- see
+    scripts/check_fast_sweep.py.  ``dag_compact``
     deterministically reorders the circuit before each sweep so every
     <=dag_max_wires-wire block becomes contiguous (dag.py), exposing windows
     to the sweep that transport_shuffle only finds by chance; it is a valid
@@ -560,6 +730,8 @@ def reduce_circuit(
             from .batched import batched_sweep
 
             return batched_sweep(gates_list, num_qubits_, db_, max_block_len_)
+        if use_fast_sweep:
+            return _sweep_reduce_fast(gates_list, num_qubits_, db_, max_block_len_)
         return _sweep_reduce(gates_list, num_qubits_, db_, max_block_len_)
 
     def done() -> bool:
@@ -576,6 +748,8 @@ def reduce_circuit(
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
         reduced += rz_global_pass_fixpoint(working, one_wire)
+    if cz_pass:
+        reduced += collapse_cz_parity(working, num_qubits)
     compact(working)
     reduced += sweep_fn(working, num_qubits, db, max_block_len)
     if done():
@@ -584,6 +758,8 @@ def reduce_circuit(
     reduced += reduce_single_wire_runs(working, one_wire)
     if rz_pass:
         reduced += rz_global_pass_fixpoint(working, one_wire)
+    if cz_pass:
+        reduced += collapse_cz_parity(working, num_qubits)
     compact(working)
     reduced += sweep_fn(working, num_qubits, db, max_block_len)
     if done():
@@ -603,12 +779,16 @@ def reduce_circuit(
         transport_shuffle(working, num_qubits, rng, cache, direction=1 if passes % 2 else -1)
         if rz_pass:
             reduced += rz_global_pass_fixpoint(working, one_wire)
+        if cz_pass:
+            reduced += collapse_cz_parity(working, num_qubits)
         found = sweep_fn(working, num_qubits, db, max_block_len)
         if found == 0:
             cluster_single_qubit(working, num_qubits)
             found += reduce_single_wire_runs(working, one_wire)
             if rz_pass:
                 found += rz_global_pass_fixpoint(working, one_wire)
+            if cz_pass:
+                found += collapse_cz_parity(working, num_qubits)
             compact(working)
             found += sweep_fn(working, num_qubits, db, max_block_len)
         reduced += found

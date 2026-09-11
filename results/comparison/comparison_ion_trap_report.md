@@ -1,8 +1,8 @@
 # Comparison benchmark report
 
 - Gate set: `ion_trap` (paper Table 6, 4 qubits, length 300)
-- Circuits per method: 100, per-circuit budget: 30.0s
-- Generated: 2026-08-13 03:55:49
+- Circuits per method: 8, per-circuit budget: 10.0s
+- Generated: 2026-09-10 22:30:21
 - Verifier: exact symplectic (ion trap) / numeric 1e-5 (NISQ)
 
 Paper reference ('Ours', mean +/- std over 100 runs):
@@ -15,27 +15,28 @@ All methods on identical circuits (mean +/- std):
 
 | method | RX | RY | RZ | RXX | total | vs paper Ours | two-qubit | time (s) |
 |---|---|---|---|---|---|---|---|---|
-| **exact_len** | 3.8 (+- 1.7) | 19.2 (+- 4.9) | 19.5 (+- 4.9) | 30.9 (+- 6.4) | 73.5 (+- 14.4) | WIN (-37.5) | 30.9 | 30.1 |
-| **exact_cost** | 4.0 (+- 1.7) | 20.2 (+- 4.7) | 20.1 (+- 4.7) | 27.2 (+- 4.5) | 71.6 (+- 11.8) | WIN (-39.4) | 27.2 | 30.2 |
-| **qiskit_l1** | 26.2 (+- 4.6) | 39.2 (+- 5.2) | 43.1 (+- 4.9) | 58.5 (+- 7.1) | 167.1 (+- 14.7) | base (paper 196) | 58.5 | 0.0 |
-| **qiskit_l2** | 37.1 (+- 6.7) | 36.5 (+- 6.2) | 43.2 (+- 5.2) | 45.2 (+- 6.2) | 162.0 (+- 14.7) | base (paper 204) | 45.2 | 0.0 |
-| **qiskit_l3** | 36.8 (+- 6.8) | 36.1 (+- 6.4) | 43.1 (+- 5.1) | 44.8 (+- 6.3) | 160.8 (+- 14.8) | base (paper 204) | 44.8 | 0.0 |
+| **exact_len** | 5.0 (+- 1.2) | 22.5 (+- 5.8) | 20.5 (+- 4.7) | 34.5 (+- 5.4) | 82.5 (+- 13.0) | WIN (-28.5) | 34.5 | 10.1 |
+| **exact_cost** | 6.4 (+- 2.8) | 23.4 (+- 2.6) | 24.4 (+- 5.9) | 30.4 (+- 3.8) | 84.5 (+- 11.1) | WIN (-26.5) | 30.4 | 10.3 |
+| **qiskit_l1** | 25.5 (+- 5.3) | 39.4 (+- 4.9) | 43.0 (+- 3.6) | 59.1 (+- 8.5) | 167.0 (+- 15.7) | base (paper 196) | 59.1 | 0.0 |
+| **qiskit_l2** | 37.2 (+- 7.7) | 36.8 (+- 5.4) | 41.0 (+- 5.6) | 48.5 (+- 5.2) | 163.5 (+- 13.9) | base (paper 204) | 48.5 | 0.0 |
+| **qiskit_l3** | 37.1 (+- 7.8) | 36.6 (+- 5.5) | 40.9 (+- 5.5) | 48.4 (+- 5.2) | 163.0 (+- 14.2) | base (paper 204) | 48.4 | 0.0 |
+| **bqskit_l2** | 55.3 (+- 3.7) | 0.0 (+- 0.0) | 79.0 (+- 4.5) | 42.3 (+- 2.6) | 176.7 (+- 8.7) | base (paper 154) | 42.3 | 0.0 |
 
 Baseline fidelity check (our means vs paper's reported baseline means):
 
 | baseline | our total | paper total | delta |
 |---|---:|---:|---:|
-| qiskit_l1 | 167.1 | 196 | -28.9 |
-| qiskit_l2 | 162.0 | 204 | -42.0 |
-| qiskit_l3 | 160.8 | 204 | -43.2 |
-| bqskit_l2 | (skipped) | 154 | -- |
+| qiskit_l1 | 167.0 | 196 | -29.0 |
+| qiskit_l2 | 163.5 | 204 | -40.5 |
+| qiskit_l3 | 163.0 | 204 | -41.0 |
+| bqskit_l2 | 176.7 | 154 | +22.7 |
 | bqskit_l3 | (skipped) | 129 | -- |
 | bqskit_l4 | (skipped) | 126 | -- |
 
 Verdict notes:
 
-- `exact_len`: total WIN vs paper (73.5 vs 111, -37.5); two-qubit WIN (30.9 vs paper 43); equivalence pass rate 1.000; best 41.
-- `exact_cost`: total WIN vs paper (71.6 vs 111, -39.4); two-qubit WIN (27.2 vs paper 43); equivalence pass rate 1.000; best 45.
+- `exact_len`: total WIN vs paper (82.5 vs 111, -28.5); two-qubit WIN (34.5 vs paper 43); equivalence pass rate 1.000; best 61.
+- `exact_cost`: total WIN vs paper (84.5 vs 111, -26.5); two-qubit WIN (30.4 vs paper 43); equivalence pass rate 1.000; best 60.
 
 Timing caveat: the "time (s)" column is the per-circuit budget cap -- each reducer
 loops until its budget is exhausted. It is a cutoff, not a convergence time, and is

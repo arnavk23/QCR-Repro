@@ -135,7 +135,12 @@ Returns (out, removed); output contains only pool-representable gates."""
     for _ in range(max_iters):
         removed = 0
         if zx:
-            if gate_set_name != "ion_trap":
+            # RZ-across-CZ gathering is valid only when the two-qubit gate
+            # is diagonal (CZ); ion-trap pools (including the mixed
+            # finer-grid one) use RXX, which does not commute with RZ in
+            # general, so this must be an allowlist of known CZ-based
+            # pools, not a denylist of one specific ion-trap name.
+            if gate_set_name in ("nisq", "nisq_clifford"):
                 working = gather_rz_across_cz(working, num_qubits)
             working, r = zx_cancellations(working)
             removed += r

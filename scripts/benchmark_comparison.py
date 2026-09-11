@@ -154,24 +154,36 @@ def _qiskit_transpile(gates, num_qubits: int, gateset: str, level: int):
 _BQSKIT = {"state": "unknown"}
 
 
-def _bqskit_compile(gates, num_qubits: int, gateset: str, level: int):
+def _bqskit_compile(gates, num_qubits: int, gateset: str, level: int, compiler=None):
     """Compile a pool circuit with BQSKit (optimization levels 2..4).
+
+    ``compiler``, if given, is a pre-built bqskit.compiler.Compiler reused
+    across calls -- BQSKit's compile() spins up its own detached runtime
+    server per call by default, which both adds per-circuit startup cost
+    and, critically, conflicts when called from inside this script's own
+    multiprocessing.Pool worker processes (nested runtime spawn -> hung
+    "Connection refused by runtime server" retries and a hard crash; see
+    _run_bqskit_tasks, which runs these sequentially in the main process
+    with one shared Compiler instead).
 
     Returns (counts, total, ok) or None if BQSKit is unavailable/failed.
     """
     if _BQSKIT["state"] == "missing":
         return None
-    try:
-        if _BQSKIT["state"] != "ok":
+    if _BQSKIT["state"] != "ok":
+        try:
             import numpy as np
             from bqskit import Circuit, MachineModel, compile
             from bqskit.compiler.gateset import GateSet
             from bqskit.ir.gates import RXGate, RYGate, RZGate, CZGate, RXXGate
-
-            _BQSKIT.update({"state": "ok", "np": np, "Circuit": Circuit,
-                            "MachineModel": MachineModel, "compile": compile,
-                            "GateSet": GateSet, "RXGate": RXGate, "RYGate": RYGate,
-                            "RZGate": RZGate, "CZGate": CZGate, "RXXGate": RXXGate})
+        except Exception:
+            _BQSKIT["state"] = "missing"
+            return None
+        _BQSKIT.update({"state": "ok", "np": np, "Circuit": Circuit,
+                        "MachineModel": MachineModel, "compile": compile,
+                        "GateSet": GateSet, "RXGate": RXGate, "RYGate": RYGate,
+                        "RZGate": RZGate, "CZGate": CZGate, "RXXGate": RXXGate})
+    try:
         B = _BQSKIT
         c = B["Circuit"](num_qubits)
         for g in gates:
@@ -188,7 +200,7 @@ def _bqskit_compile(gates, num_qubits: int, gateset: str, level: int):
         basis = [B["RXGate"](), B["RYGate"](), B["RZGate"](), B["RXXGate"]()] if gateset == "ion_trap" \
             else [B["RXGate"](), B["RZGate"](), B["CZGate"]()]
         model = B["MachineModel"](num_qubits, gate_set=B["GateSet"](list(basis)))
-        out = B["compile"](c, model=model, optimization_level=level)
+        out = B["compile"](c, model=model, optimization_level=level, compiler=compiler)
         counts = {}
         for gate, n in dict(out.gate_counts).items():
             name = type(gate).__name__.replace("Gate", "")
@@ -197,8 +209,8 @@ def _bqskit_compile(gates, num_qubits: int, gateset: str, level: int):
         u1 = B["np"].asarray(out.get_unitary())
         ok = equivalent_up_to_global_phase(circuit_unitary(num_qubits, gates), u1, atol=1e-5)
         return counts, total, ok
-    except Exception:
-        _BQSKIT["state"] = "missing"
+    except Exception as exc:
+        print(f"  [warn] bqskit compile failed (seed/level {level}): {exc}", flush=True)
         return None
 
 
@@ -228,7 +240,7 @@ def _count_twq(gates) -> int:
 
 def _worker(args):
     (gateset, method, num_qubits, length, budget_s, seed, weights, rz_pass, depths,
-     max_block_len, restarts, backend, rf_gate, hybrid) = args
+     max_block_len, restarts, backend, rf_gate, hybrid, fast_sweep) = args
     gates, _ = random_circuit(num_qubits, length, gateset, seed=seed, weights=weights)
     if method.startswith("qiskit_"):
         res = _qiskit_transpile(gates, num_qubits, gateset, int(method[-1]))
@@ -259,6 +271,7 @@ def _worker(args):
             r, stats = reduce_circuit_exact(
                 gates, num_qubits, db, budget_s, seed + i * 10000,
                 cost_aware=cost_aware, max_block_len=max_block_len,
+                use_fast_sweep=fast_sweep,
             )
             key = (_count_twq(r), len(r)) if cost_aware else (len(r),)
             if best_r is None or key < best_key:
@@ -297,6 +310,7 @@ def _worker(args):
                 rz_pass=rz_pass,
                 cost_aware=cost_aware,
                 max_block_len=max_block_len,
+                use_fast_sweep=fast_sweep,
             )
             key = (_count_twq(r), len(r)) if cost_aware else (len(r),)
             if best_r is None or key < best_key:
@@ -370,6 +384,51 @@ def _run_tasks(tasks: list, workers: int) -> list[dict]:
                 pass
     print("  [warn] falling back to sequential execution")
     return [_worker(t) for t in tasks]
+
+
+def _run_bqskit_tasks(tasks: list) -> list[dict]:
+    """Run bqskit_* tasks sequentially in the main process with one shared
+    Compiler instance, never inside the multiprocessing.Pool worker
+    processes _run_tasks uses for everything else.
+
+    BQSKit's compile() spins up its own detached runtime server by default;
+    nesting that inside another process pool's workers makes it hang
+    retrying a "Connection refused by runtime server" and crashes the
+    whole run (observed directly: exit code 4 after ~2 hours of retries on
+    a Windows spawn-context pool). Running these here, sequentially, with
+    one Compiler reused across circuits, avoids the nesting and the
+    per-circuit runtime-server startup cost both at once.
+    """
+    if not tasks:
+        return []
+    try:
+        from bqskit.compiler import Compiler
+    except Exception:
+        return [
+            {"seed": t[5], "method": t[1], "start": 0, "end": -1, "counts": {}, "twq": -1,
+             "secs": 0.0, "ok": False, "verifier": "unavailable"}
+            for t in tasks
+        ]
+    results: list[dict] = []
+    t0 = time.time()
+    with Compiler() as compiler:
+        for i, t in enumerate(tasks):
+            (gateset, method, num_qubits, length, budget_s, seed, weights, rz_pass, depths,
+             max_block_len, restarts, backend, rf_gate, hybrid, fast_sweep) = t
+            gates, _ = random_circuit(num_qubits, length, gateset, seed=seed, weights=weights)
+            res = _bqskit_compile(gates, num_qubits, gateset, int(method[-1]), compiler=compiler)
+            if res is None:
+                results.append({"seed": seed, "method": method, "start": len(gates), "end": -1,
+                                 "counts": {}, "twq": -1, "secs": 0.0, "ok": False,
+                                 "verifier": "unavailable"})
+            else:
+                counts, total, ok = res
+                results.append({"seed": seed, "method": method, "start": len(gates), "end": total,
+                                 "counts": counts, "twq": counts.get("RXX", 0) + counts.get("CZ", 0),
+                                 "secs": 0.0, "ok": ok, "verifier": "bqskit-1e-5"})
+            if (i + 1) % 5 == 0 or i + 1 == len(tasks):
+                print(f"  [bqskit] {i + 1}/{len(tasks)} done ({time.time() - t0:.1f}s)", flush=True)
+    return results
 
 
 # --------------------------------------------------------------------------- #
@@ -527,6 +586,11 @@ def main() -> None:
                         help="BQSKit optimization levels to run, comma-separated (default 2,3,4)")
     parser.add_argument("--restarts", type=int, default=1,
                         help="best-of-K independent reductions per circuit (more compute, better results)")
+    parser.add_argument("--fast-sweep", action="store_true",
+                        help="numeric_len/numeric_cost only: use the incremental per-position sweep "
+                             "(reduce_circuit(use_fast_sweep=True)) instead of rebuilding each tried "
+                             "window length's unitary from scratch -- same per-window result, higher "
+                             "search throughput per second (scripts/check_fast_sweep*.py)")
     parser.add_argument("--outdir", type=str, default="results/comparison")
     parser.add_argument("--quick", action="store_true", help="8 circuits, 10 s budget (smoke test)")
     args = parser.parse_args()
@@ -611,16 +675,26 @@ def main() -> None:
                 continue
             tasks.append((args.gateset, m, args.num_qubits, args.length, args.budget, s,
                           weights, rz_pass, depths, max_block_len, max(1, args.restarts),
-                          backend, args.rf_gate, args.hybrid))
+                          backend, args.rf_gate, args.hybrid, args.fast_sweep))
 
     print(
         f"[{args.gateset}] {args.num_circuits} circuits x {args.length} gates (q{args.num_qubits}), "
         f"budget {args.budget}s, methods {methods}, depths {depths}",
         flush=True,
     )
+    bqskit_tasks = [t for t in tasks if t[1].startswith("bqskit_")]
+    other_tasks = [t for t in tasks if not t[1].startswith("bqskit_")]
+
     t0 = time.time()
-    workers = args.workers or min(len(tasks), os.cpu_count() or 4)
-    results = _run_tasks(tasks, workers)
+    results = []
+    workers = 0
+    if other_tasks:
+        workers = args.workers or min(len(other_tasks), os.cpu_count() or 4)
+        results = _run_tasks(other_tasks, workers)
+    if bqskit_tasks:
+        print(f"[{args.gateset}] running {len(bqskit_tasks)} bqskit task(s) sequentially "
+              "in the main process (see _run_bqskit_tasks for why)", flush=True)
+        results += _run_bqskit_tasks(bqskit_tasks)
     wall = time.time() - t0
 
     outdir = Path(args.outdir)
@@ -651,6 +725,7 @@ def main() -> None:
         "backend": backend,
         "rf_gate": args.rf_gate,
         "hybrid": args.hybrid,
+        "fast_sweep": args.fast_sweep,
         "date": time.strftime("%Y-%m-%d %H:%M:%S"),
         "wall_sec": round(wall, 1),
         "with_numeric": args.numeric,

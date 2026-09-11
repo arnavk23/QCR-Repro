@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 
 from .config import GateInstance
-from .exact_database import SymplecticDatabase
+from .exact_database import SymplecticDatabase, _tableau_key
 from .reducer import (
     _gate_key,
     cluster_single_qubit,
@@ -190,6 +190,195 @@ def _sweep_reduce_len(
     return total
 
 
+def _widen_tableau(tableau: SignedTableau, new_local_idx: int) -> None:
+    """Append rows for a newly-introduced local wire, in exactly the
+    position SignedTableau(n)'s own constructor would put them
+    ([X_0..X_{n-1}, Z_0..Z_{n-1}]) -- so a key computed on an incrementally
+    grown tableau stays comparable to the graph's precomputed nodes, which
+    were all built via that constructor. Before: [X_0..X_{k-1}, Z_0..Z_{k-1}]
+    (length 2k). Inserting X_new at index k puts it right after X_{k-1} and
+    before Z_0; appending Z_new after that puts it after Z_{k-1}. Result:
+    [X_0..X_new, Z_0..Z_new] -- the same order SignedTableau(k+1) produces.
+    """
+    tableau.rows.insert(new_local_idx, (((new_local_idx, "X"),), 1 + 0j))
+    tableau.rows.append((((new_local_idx, "Z"),), 1 + 0j))
+    tableau.n += 1
+
+
+def _build_incremental_tableau_candidates(
+    window: list[GateInstance], db: SymplecticDatabase, max_block_len: int
+) -> tuple[dict[int, tuple[tuple[int, ...] | None, list, "object"] | None], dict[int, int]]:
+    """Incrementally extends a tableau one gate at a time (length 1..hi),
+    widening it (see :func:`_widen_tableau`) exactly when a gate introduces
+    a wire the window hasn't touched yet, instead of rebuilding a fresh
+    tableau from scratch for every one of the hi-1 lengths
+    SymplecticGraph.block_key would otherwise redo (as
+    _sweep_reduce_len/_sweep_reduce_cost do today).
+
+    Returns (results, local_wire_map) where results[length] is None (no
+    graph for that wire count, or a gate not representable in this Clifford
+    pool) or (chain, alts, graph) -- chain the shortest known factorization,
+    alts the Pareto-optimal (twq, len, chain) list, both from the graph for
+    the wire count that length's window touches. local_wire_map only grows
+    (a wire's local index never changes once assigned), so it -- or its
+    reverse -- can be used to restore *any* length's candidate afterward,
+    not just the last one built.
+    """
+    hi = min(max_block_len, len(window))
+    local_wire_map: dict[int, int] = {}
+    tableau = SignedTableau(0)
+    results: dict[int, tuple[tuple[int, ...] | None, list, object] | None] = {}
+    ok = True
+    for length in range(1, hi + 1):
+        gate = window[length - 1]
+        if ok:
+            for w in gate.qubits:
+                if w not in local_wire_map:
+                    idx = len(local_wire_map)
+                    local_wire_map[w] = idx
+                    _widen_tableau(tableau, idx)
+            k = len(local_wire_map)
+            graph = db.graphs.get(k)
+            if graph is None:
+                ok = False
+            else:
+                local_gate = GateInstance(
+                    name=gate.name,
+                    qubits=tuple(sorted(local_wire_map[q] for q in gate.qubits)),
+                    theta=gate.theta,
+                )
+                try:
+                    token = graph.pool.token_for_gate(local_gate)
+                    tableau.apply(graph.pool.gate_for_token(token))
+                except (KeyError, ValueError):
+                    ok = False
+        if length < 2 or not ok:
+            results[length] = None
+            continue
+        key = _tableau_key(tableau)
+        chain = graph.buckets.get(key)
+        alts = graph.alts.get(key, [])
+        results[length] = (chain, alts, graph)
+    return results, local_wire_map
+
+
+def _sweep_reduce_len_fast(gates: list[GateInstance], db: SymplecticDatabase, max_block_len: int) -> int:
+    """Same result as :func:`_sweep_reduce_len`, built with
+    :func:`_build_incremental_tableau_candidates` instead of rebuilding
+    every tried length's tableau from scratch."""
+    total = 0
+    while True:
+        count = 0
+        pos = 0
+        n = len(gates)
+        while pos < n:
+            hi = min(max_block_len, n - pos)
+            window = gates[pos : pos + hi]
+            results, local_wire_map = _build_incremental_tableau_candidates(window, db, max_block_len)
+            replaced = False
+            for length in range(hi, 1, -1):
+                entry = results.get(length)
+                if entry is None:
+                    continue
+                chain, _alts, graph = entry
+                if chain is not None and len(chain) < length:
+                    reverse = {idx: w for w, idx in local_wire_map.items()}
+                    decoded = graph.pool.decode(list(chain))
+                    candidate = [
+                        GateInstance(
+                            name=g.name,
+                            qubits=tuple(sorted(reverse[q] for q in g.qubits)),
+                            theta=g.theta,
+                        )
+                        for g in decoded
+                    ]
+                    gates[pos : pos + length] = candidate
+                    n = len(gates)
+                    count += 1
+                    replaced = True
+                    break
+            if replaced:
+                pos = max(0, pos - 1)
+            else:
+                pos += 1
+        total += count
+        if count == 0:
+            break
+    return total
+
+
+def _sweep_reduce_cost_fast(
+    gates: list[GateInstance],
+    db: SymplecticDatabase,
+    max_block_len: int,
+    prefer: dict[str, float] | None = None,
+) -> int:
+    """Same result as :func:`_sweep_reduce_cost`, built with
+    :func:`_build_incremental_tableau_candidates` instead of rebuilding
+    every tried length's tableau from scratch."""
+    prefer = prefer or {}
+    total = 0
+    while True:
+        count = 0
+        pos = 0
+        n = len(gates)
+        while pos < n:
+            hi = min(max_block_len, n - pos)
+            window = gates[pos : pos + hi]
+            results, local_wire_map = _build_incremental_tableau_candidates(window, db, max_block_len)
+            reverse = {idx: w for w, idx in local_wire_map.items()}
+            # Precompute each length's own two-qubit count in one cheap
+            # ascending pass (needed for the Pareto acceptance test below),
+            # but *apply* longest-first, exactly like _sweep_reduce_cost.
+            block_twq_at: dict[int, int] = {}
+            running_twq = 0
+            for length in range(1, hi + 1):
+                if len(window[length - 1].qubits) == 2:
+                    running_twq += 1
+                block_twq_at[length] = running_twq
+            replaced = False
+            for length in range(hi, 1, -1):
+                entry = results.get(length)
+                if entry is None:
+                    continue
+                _chain, alts, graph = entry
+                block_twq = block_twq_at[length]
+                best = None
+                best_key = None
+                for twq, ln, chain in alts:
+                    if ln > length:
+                        continue
+                    if ln == length and twq >= block_twq:
+                        continue
+                    decoded = graph.pool.decode(list(chain))
+                    cand_cost = sum(prefer.get(g.name, 1.0) for g in decoded)
+                    comparison = (twq, ln, cand_cost)
+                    if best is None or comparison < best_key:
+                        best, best_key = decoded, comparison
+                if best is not None:
+                    candidate = [
+                        GateInstance(
+                            name=g.name,
+                            qubits=tuple(sorted(reverse[q] for q in g.qubits)),
+                            theta=g.theta,
+                        )
+                        for g in best
+                    ]
+                    gates[pos : pos + length] = candidate
+                    n = len(gates)
+                    count += 1
+                    replaced = True
+                    break
+            if replaced:
+                pos = max(0, pos - 1)
+            else:
+                pos += 1
+        total += count
+        if count == 0:
+            break
+    return total
+
+
 def _random_escape_cost(
     gates: list[GateInstance],
     db: SymplecticDatabase,
@@ -242,10 +431,17 @@ def reduce_circuit_exact(
     rz_pass: bool = False,
     max_passes: int = 20000,
     prefer: dict[str, float] | None = None,
+    use_fast_sweep: bool = False,
 ) -> tuple[list[GateInstance], ExactStats]:
     """Strong exact reducer: cluster + collapse + cost-aware sweep + transport.
 
-cost_aware=True minimizes (two-qubit count, length); prefer maps gate names to cost weights (lower = more preferred). Equivalence is bit-exact up to global phase."""
+cost_aware=True minimizes (two-qubit count, length); prefer maps gate names to cost weights (lower = more preferred). Equivalence is bit-exact up to global phase.
+``use_fast_sweep`` swaps the sweep for :func:`_sweep_reduce_len_fast` /
+:func:`_sweep_reduce_cost_fast`, which grow one shared tableau per
+position instead of rebuilding it from scratch for every one of the
+max_block_len-1 tried window lengths (the numeric engine's analogous
+scripts/check_fast_sweep*.py optimization, applied to the exact/symplectic
+path)."""
     rng = random.Random(seed)
     working = list(gates)
     best = list(gates)
@@ -274,6 +470,12 @@ cost_aware=True minimizes (two-qubit count, length); prefer maps gate names to c
         """Cost-aware mode runs the (twq, len) sweep and then the pure-length
         sweep, so both objectives are pushed on every pass; length-only mode
         keeps the paper's single objective."""
+        if use_fast_sweep:
+            if cost_aware:
+                return _sweep_reduce_cost_fast(
+                    gates_list, db_, max_block_len_, prefer
+                ) + _sweep_reduce_len_fast(gates_list, db_, max_block_len_)
+            return _sweep_reduce_len_fast(gates_list, db_, max_block_len_)
         if cost_aware:
             return _sweep_reduce_cost(gates_list, db_, max_block_len_, prefer) + _sweep_reduce_len(
                 gates_list, db_, max_block_len_
