@@ -135,7 +135,7 @@ def _qiskit_transpile(gates, num_qubits: int, gateset: str, level: int):
                 qc.append(Q["RXXGate"](g.theta), rev(g.qubits))
             elif g.name == "CZ":
                 qc.append(Q["CZGate"](), rev(g.qubits))
-        basis = ["rx", "ry", "rz", "rxx"] if gateset == "ion_trap" else ["rx", "rz", "cz"]
+        basis = ["rx", "ry", "rz", "rxx"] if gateset in ("ion_trap", "ion_trap_mixed") else ["rx", "rz", "cz"]
         t = Q["transpile"](qc, basis_gates=basis, optimization_level=level)
         ops = t.count_ops()
         total = sum(n for name, n in ops.items() if name not in ("global_phase", "id", "delay"))
@@ -197,7 +197,7 @@ def _bqskit_compile(gates, num_qubits: int, gateset: str, level: int, compiler=N
                 c.append_gate(B["RXXGate"]().with_all_frozen_params([g.theta]), [g.qubits[0], g.qubits[1]])
             elif g.name == "CZ":
                 c.append_gate(B["CZGate"](), [g.qubits[0], g.qubits[1]])
-        basis = [B["RXGate"](), B["RYGate"](), B["RZGate"](), B["RXXGate"]()] if gateset == "ion_trap" \
+        basis = [B["RXGate"](), B["RYGate"](), B["RZGate"](), B["RXXGate"]()] if gateset in ("ion_trap", "ion_trap_mixed") \
             else [B["RXGate"](), B["RZGate"](), B["CZGate"]()]
         model = B["MachineModel"](num_qubits, gate_set=B["GateSet"](list(basis)))
         out = B["compile"](c, model=model, optimization_level=level, compiler=compiler)
@@ -290,9 +290,10 @@ def _worker(args):
         # instead of re-loading a multi-million-node graph from scratch.
         db = _load_db("numeric", gateset, depths, backend)
         if hybrid:
-            if gateset != "nisq":
-                raise ValueError("--hybrid is implemented for the NISQ pool only")
-            exact_clifford = _load_db("exact", "nisq_clifford", HYBRID_EXACT_DEPTHS)
+            clifford_gateset = {"nisq": "nisq_clifford", "ion_trap_mixed": "ion_trap_mixed_clifford"}.get(gateset)
+            if clifford_gateset is None:
+                raise ValueError("--hybrid is implemented for the nisq and ion_trap_mixed pools only")
+            exact_clifford = _load_db("exact", clifford_gateset, HYBRID_EXACT_DEPTHS)
             numeric_gate = RfGate() if rf_gate else None
             db = HybridDatabase(db, exact_clifford, numeric_gate=numeric_gate)
         elif rf_gate:

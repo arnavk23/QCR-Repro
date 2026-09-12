@@ -6,15 +6,30 @@ quantum circuit reduction, evaluated against Rosenhahn, Osborne & Hirche,
 104509 (2025) [[doi]](https://doi.org/10.1088/1367-2630/ae0e40).
 
 On the ion-trap (all-Clifford) gate set, a bit-exact signed-symplectic
-engine plus a two-qubit-aware search objective beats the published result.
-On the NISQ gate set a gap remains; six candidate explanations for it are
-tested and ruled out in a systematic diagnostic study (`report/draft_paper.tex`).
+engine plus a two-qubit-aware search objective beats the published result,
+and also beats BQSKit L2/L3 by more than 2x on both total and two-qubit
+gate count (`results/comparison_bqskit_ion/`, n=30). On NISQ, the same
+method wins on total gate count against BQSKit too, though two-qubit count
+there is a genuine near-tie rather than a clean win
+(`results/comparison_bqskit_nisq30/`, n=30). On the NISQ gate set a gap
+remains against the published baseline itself; six candidate explanations
+for it are tested and ruled out in a systematic diagnostic study
+(`report/draft_paper.tex`).
+
 The repository also includes extensions not in the original paper: a
 dependency-graph based block-reordering pass (`src/dag.py`), a
 disk-backed compute-graph backend for databases too large to fit in RAM,
-and an incremental per-window search construction that removes redundant
-from-scratch rebuilds in the sweep's hot loop, raising search throughput
-under the same time budget (`src/reducer.py`, `src/exact_reducer.py`).
+an incremental per-window search construction that removes redundant
+from-scratch rebuilds in the sweep's hot loop (`src/reducer.py`,
+`src/exact_reducer.py`), and a richer mixed Clifford/non-Clifford
+ion-trap pool (±π/2, ±π/4, ±π/8) that stress-tests the whole approach on a
+larger gate set. That last one is an honest negative result worth reading
+before assuming this scales freely: the larger pool forces much shallower
+compute graphs under the same build budget, and at that depth the method
+currently loses even to plain qiskit (Section "A mixed
+Clifford/non-Clifford ion-trap pool: a boundary case" in
+`report/draft_paper.tex`) — a real boundary condition of the technique,
+not a bug.
 
 ## Results
 
@@ -29,6 +44,23 @@ across methods (`results/comparison/`):
 Both differences are statistically significant (p < 10⁻⁴⁵ and p < 10⁻⁶⁰
 respectively, one-sample t-test, n = 100). Full method, protocol, and the
 NISQ diagnostic study are in `report/draft_paper.tex`.
+
+**Against BQSKit** (n=30 per gate set, `results/comparison_bqskit_ion/`,
+`results/comparison_bqskit_nisq30/`):
+
+| Gate set | This work (total, twq) | BQSKit L2 | BQSKit L3 |
+|---|---:|---:|---:|
+| Ion trap | 67.8, 25.4 | 155.1, 36.6 | 133.0, 30.3 |
+| NISQ | 160.5, 51.2 | 228.9, 65.2 | 213.2, **50.8** |
+
+Ion-trap is a clean win on both metrics. NISQ wins on total gate count but
+two-qubit count is a genuine near-tie (BQSKit L3 edges us slightly there,
+consistently across two independent runs) — a real, currently-open
+limitation, not noise; see the NISQ cost-aware diagnostic in
+`report/draft_paper.tex` for why. BQSKit L4 is omitted: every circuit at
+that level failed unitary verification in our setup (likely an internal
+qubit-relabeling issue at that optimization level), so its numbers aren't
+trustworthy as reported.
 
 ## Installation
 

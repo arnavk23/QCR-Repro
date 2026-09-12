@@ -1,0 +1,16 @@
+method,seed,start,end,runtime_s,ok,verifier,twq,RX,RY,RZ,RXX,CZ
+hybrid_cost,0,300,170,5.462,True,numeric-1e-5,24,51,46,49,24,0
+hybrid_cost,1,300,171,5.266,True,numeric-1e-5,25,40,52,54,25,0
+hybrid_cost,2,300,162,5.263,True,numeric-1e-5,18,40,57,47,18,0
+hybrid_len,0,300,169,5.109,True,numeric-1e-5,27,48,44,50,27,0
+hybrid_len,1,300,170,5.273,True,numeric-1e-5,25,41,55,49,25,0
+hybrid_len,2,300,159,5.055,True,numeric-1e-5,18,41,53,47,18,0
+qiskit_l1,0,300,129,0.0,True,qiskit-1e-5,27,17,34,51,27,0
+qiskit_l1,1,300,112,0.0,True,qiskit-1e-5,25,11,26,50,25,0
+qiskit_l1,2,300,106,0.0,True,qiskit-1e-5,18,8,31,49,18,0
+qiskit_l2,0,300,130,0.0,True,qiskit-1e-5,22,30,25,53,22,0
+qiskit_l2,1,300,130,0.0,True,qiskit-1e-5,24,27,23,56,24,0
+qiskit_l2,2,300,97,0.0,True,qiskit-1e-5,14,13,25,45,14,0
+qiskit_l3,0,300,125,0.0,True,qiskit-1e-5,21,26,25,53,21,0
+qiskit_l3,1,300,130,0.0,True,qiskit-1e-5,24,27,23,56,24,0
+qiskit_l3,2,300,96,0.0,True,qiskit-1e-5,14,14,24,44,14,0

@@ -56,7 +56,13 @@ axis. Benchmarking the deeper four-wire graph exposed an engineering
 defect general enough to be worth reporting on its own: caching a
 disk-backed compute graph per worker process rather than per task, under
 process-parallel search, changes measured search cost by two orders of
-magnitude and can invert a benchmark's conclusion.
+magnitude and can invert a benchmark's conclusion. A third, richer
+ion-trap pool mixing Clifford and non-Clifford rotations ($\pm\pi/2$,
+$\pm\pi/4$, $\pm\pi/8$) exposes a boundary condition neither protocol
+reveals alone: its branching factor forces much shallower compute graphs
+under the same build budget, and at that depth the method loses even to a
+generic transpiler, directly demonstrating that the approach's edge is
+a direct trade against pool size, not a free property of the technique.
 \end{abstract}
 
 \noindent\textbf{Keywords:} quantum circuit optimization, transpilation,
@@ -713,6 +719,55 @@ compute graph is intrinsically larger at every depth
 search. The published method's NISQ advantage, whatever its exact
 mechanism, is doing something our database construction does not yet
 replicate on that harder pool.
+
+\subsection{A mixed Clifford/non-Clifford ion-trap pool: a boundary case}
+\label{sec:mixed-ion}
+
+Both protocols evaluated above fix a fully-Clifford ion-trap pool and a
+NISQ pool that is Clifford only through a small sub-pool routed to the
+exact engine by the hybrid database (Section~\ref{sec:method}). To test
+whether the method's ion-trap advantage survives a richer, more
+transpiler-realistic gate set, we built a third pool: RX, RY, RZ at
+$\pm\pi/2$, $\pm\pi/4$, and $\pm\pi/8$ (mixing Clifford and non-Clifford
+rotations in the same pool), with RXX fixed at the native $\pi/2$
+entangler as before. The same hybrid routing applies: windows entirely
+within the $\pm\pi/2$ sub-pool go to the exact engine, everything else to
+the numeric one.
+
+This pool's branching factor grows sharply with wire count relative to
+either evaluated protocol: 18/37/57/78 tokens at one through four wires,
+against plain ion-trap's 6/13/21/30. Direct calibration of the compute
+graph's own growth (not the paper's evaluation protocol) found the
+one-wire graph alone reaches 545{,}000 nodes by depth 6 and 25.6 million by
+depth 8, a 47$\times$ jump for two additional levels. The depths usable
+within a comparable time budget are consequently much shallower than
+either protocol above: 6/4/4/3 by wire count, against ion-trap's 12/10/7/5.
+
+On this pool, at these depths, the method loses to plain qiskit, not just
+to BQSKit: an exploratory run (3 circuits, 4-qubit, length-300, 5-second
+budget) reduced to a mean of 166.0 gates (length-minimizing) and 167.7
+gates (cost-aware), against qiskit's 115.7--119.0 across optimization
+levels 1--3. Every reduced circuit still verifies exactly against its
+input (bit-exact where the exact engine applies, numeric-verified
+elsewhere), so the shortfall is a search-quality gap, not a correctness
+one. Given the sample size this is a directional finding, not a
+statistically powered one, but the gap (166 against 117, roughly 42\%) is
+far larger than anything attributable to three circuits' worth of sampling
+noise.
+
+This is the boundary condition the ion-trap result above does not reveal
+on its own: the local term-replacement approach's edge comes from deep
+compute graphs, and pool size trades directly against reachable depth
+under a fixed build budget. Ion trap's small, all-Clifford pool affords
+depth 12 at one wire; this richer pool's larger branching factor limits
+the same budget to depth 6. A generic transpiler that does not depend on a
+precomputed lookup table pays no such price for a richer gate set, and
+outperforms this method here as a direct consequence. Closing this gap
+would need either a way to reach deep effective coverage without paying
+for it in raw branching factor -- plausibly the same database
+factorization question left open for NISQ (Section~\ref{sec:discussion})
+-- or a fundamentally different technique for large pools, not a deeper
+build of the current one.
 
 \section{Limitations}
 
