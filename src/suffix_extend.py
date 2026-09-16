@@ -22,10 +22,10 @@ from .gates import embedded_gate_matrix
 
 
 def _phase_key(graph, matrix: np.ndarray) -> bytes:
+    from .database import _normalize_phase
+
     flat = matrix.reshape(-1)
-    idx = int(np.argmax(np.round(np.abs(flat), 8)))
-    phase = np.angle(flat[idx])
-    nflat = flat * np.exp(-1j * phase)
+    nflat = _normalize_phase(flat)
     return graph._node_key(nflat, graph.digest_decimals)
 
 

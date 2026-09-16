@@ -34,13 +34,22 @@ def _bits_to_list(mask: int) -> list[int]:
 def lookup_batch(graph, unitaries: np.ndarray) -> list[Optional[tuple[int, ...]]]:
     """ComputeGraph.lookup for a batch of (B, d, d) unitaries.
 
-Keys are bit-identical to scalar lookups; returns token chains (or None)."""
+Keys are bit-identical to scalar lookups (see database._normalize_phase for
+why the phase reference is a whole-matrix sum rather than a single pivot
+entry); returns token chains (or None)."""
     batch = unitaries.shape[0]
     dim = unitaries.shape[1]
     flat = unitaries.reshape(batch, dim * dim)
-    mag = np.abs(flat)
-    idx = np.argmax(np.round(mag, 8), axis=1)
-    phase = np.angle(flat[np.arange(batch), idx])
+    total = flat.sum(axis=1)
+    degenerate = np.abs(total) < 1e-9
+    if np.any(degenerate):
+        mag = np.abs(flat)
+        idx = np.argmax(np.round(mag, 8), axis=1)
+        fallback_ref = flat[np.arange(batch), idx]
+        ref = np.where(degenerate, fallback_ref, total)
+    else:
+        ref = total
+    phase = np.angle(ref)
     norm = flat * np.exp(-1j * phase)[:, None]
     rounded = np.round(norm, graph.digest_decimals) + 0.0
     keys = [hashlib.sha256(rounded[i].tobytes()).digest() for i in range(batch)]

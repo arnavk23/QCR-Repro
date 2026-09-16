@@ -52,7 +52,19 @@ weak point. Six candidate explanations, including compute-graph depth
 tested independently on both the three-wire and four-wire graph, are each
 tested by direct experiment and ruled out in turn, localizing the gap to
 a database factorization limit that is not resolved by depth along either
-axis. Benchmarking the deeper four-wire graph exposed an engineering
+axis. Two further candidates fare no better: a node-keying fragility that
+under-merges 21--32\% of compute-graph nodes is real and fixed but changes
+the NISQ result by nothing, and a bidirectional reach-extension technique
+finds genuine additional matches but costs more search time than it saves.
+A ninth attempt breaks the pattern: porting the original MATLAB reference
+implementation's own reduction loop verbatim -- rejection-sampled,
+narrow-wire random windows tried at far higher raw throughput than an
+exhaustive sweep, in exchange for much weaker per-attempt mechanics --
+improves the NISQ mean by $3.4\%$ ($p<10^{-23}$, paired $t$-test, $n=100$)
+over the exhaustive sweep it replaces, and is adopted as the new default;
+it narrows the published gap slightly without closing it, and is reported
+as a real, modest, load-bearing finding rather than a resolution.
+Benchmarking the deeper four-wire graph exposed an engineering
 defect general enough to be worth reporting on its own: caching a
 disk-backed compute graph per worker process rather than per task, under
 process-parallel search, changes measured search cost by two orders of
@@ -309,7 +321,12 @@ across ones they commute with; and an escape step that resamples an
 irreducible window with a structurally different equivalent word before
 re-sweeping, accepted only if it strictly shortens the circuit. The whole
 loop repeats to a fixpoint or until the time budget expires, and every
-output is verified against the input unitary before being reported.
+output is verified against the input unitary before being reported. This
+is the pipeline diagnosed in Sections~\ref{sec:results}--\ref{sec:more-candidates};
+Section~\ref{sec:burst} adds an optional first phase for the NISQ pool
+specifically, ported directly from the published method's own reference
+implementation, that this pipeline's own final cleanup pass still runs
+after.
 
 \begin{figure}[H]
     \centering
@@ -487,12 +504,21 @@ The same protocol on the NISQ pool tells a different story
 (Table~\ref{tab:nisq}, Figure~\ref{fig:nisq}). Our reducer, run with an
 RZ-across-CZ transport pass to a fixpoint and a hybrid mode that routes any
 fully-Clifford window to the exact engine, ends at a mean of 160.5 gates
-against the published 107.
+against the published 107 with the exhaustive sweep described in
+Section~\ref{sec:method}; Sections~\ref{sec:discussion}--\ref{sec:burst}
+report a systematic attempt to explain that gap, one finding from which
+(the matlab\_demo-faithful burst reducer, Section~\ref{sec:burst}) is
+adopted as the new default and lowers this to 155.1, still against the
+same published 107 -- the diagnosis below is carried out, and should be
+read, against the pre-burst 160.5 figure it was actually run against.
 
 \begin{table}[H]
 \centering
 \caption{NISQ pool, mean gates over 100 identical circuits (std.\ in
-parentheses).}
+parentheses). The last two rows are the current default, added in
+Section~\ref{sec:burst}; every other section of this paper discusses the
+exhaustive-sweep rows above them, which is what was actually being
+diagnosed.}
 \label{tab:nisq}
 \begin{tabular}{lrrrr}
 \toprule
@@ -500,9 +526,11 @@ method & RX & RZ & CZ & total \\
 \midrule
 input             & 109 (9)    & 109 (8)    & 82 (8)     & 300 \\
 baseline \cite{Rosenhahn2025Optimization} & 45 (6) & 19 (4) & 43 (6) & 107 \\
-qiskit L1--L3     & \multicolumn{3}{c}{---}               & 157.9--201.8 \\
-ours, length-minimizing & 68.3 (5.9) & 42.3 (5.1) & 50.3 (5.6) & 160.9 (12.8) \\
-ours, cost-aware        & 68.6 (6.1) & 42.3 (5.2) & 49.6 (5.8) & 160.5 (13.4) \\
+qiskit L1--L3     & \multicolumn{3}{c}{---}               & 157.8--201.8 \\
+ours, exhaustive sweep, length-minimizing & 68.3 (5.9) & 42.3 (5.1) & 50.3 (5.6) & 160.9 (12.8) \\
+ours, exhaustive sweep, cost-aware        & 68.6 (6.1) & 42.3 (5.2) & 49.6 (5.8) & 160.5 (13.4) \\
+\textbf{ours, burst (default), length-minimizing} & 67.5 (6.0) & 38.7 (4.8) & 49.1 (5.5) & \textbf{155.3 (12.5)} \\
+\textbf{ours, burst (default), cost-aware}        & 67.6 (6.1) & 38.6 (4.9) & 48.9 (5.5) & \textbf{155.1 (12.4)} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -518,13 +546,14 @@ ours, cost-aware        & 68.6 (6.1) & 42.3 (5.2) & 49.6 (5.8) & 160.5 (13.4) \\
 Two checks establish that this comparison is fair rather than an artifact
 of a mismatched setup. The input composition matches the published Table 7
 row closely (our RX/RZ/CZ means of 109/109/82 against the published
-108/109/82), and our qiskit baselines (158.0 and 157.9 at levels 2 and 3,
+108/109/82), and our qiskit baselines (157.8 at both levels 2 and 3,
 201.8 at level 1) match the published qiskit baselines (149 and 196) far
 more closely than on the ion-trap protocol. The gap is also statistically
-unambiguous: $t=+39.7$ ($p=1.3\times10^{-62}$, $d=4.0$) for the cost-aware
-objective against the published mean of 107. The remainder of this paper
-treats this gap as the central open question and reports a systematic
-attempt to explain it.
+unambiguous: $t=+39.7$ ($p=1.3\times10^{-62}$, $d=4.0$) for the exhaustive-sweep
+cost-aware objective against the published mean of 107 (the pre-burst
+figure the diagnosis below was actually run against). The remainder of
+this paper treats this gap as the central open question and reports a
+systematic attempt to explain it.
 
 A second, narrower question is why the cost-aware objective, which clearly
 helps on ion trap (Section~\ref{sec:ion-result}), barely moves NISQ's
@@ -709,6 +738,142 @@ blocks that ours does not, it is not simply a matter of building either
 graph deeper, and identifying the specific factorization responsible
 remains open.
 
+\subsection{Two more candidates: node-key fragility and reach extension}
+\label{sec:more-candidates}
+
+Two further candidates were tested after the six above, neither of which
+was suggested by the original diagnostic pass; both are real, and neither
+closes the gap.
+
+\textbf{Node-key fragility.} Every place this codebase turns a raw complex
+matrix into a hashable compute-graph key picks a single largest-magnitude
+entry as the global-phase reference. This is fragile: two different token
+chains that reach the same unitary up to global phase are computed via
+independent floating-point multiplication paths, and for a pool rich in
+diagonal gates (RZ, CZ -- exactly NISQ) many entries legitimately tie or
+nearly tie in magnitude, so different paths can round to different entries
+as ``the largest,'' each carrying a different phase, silently fragmenting
+one physical compute-graph node into several. Replacing the single-entry
+pivot with a whole-matrix phase reference (the sum of every entry, far
+less sensitive to any one coordinate's tie-breaking) merges 21--32\% more
+nodes on the NISQ pool (2-wire depth 5: 123{,}689 $\to$ 84{,}220 nodes;
+3-wire depth 4: 83{,}820 $\to$ 66{,}261), verified safe by checking every
+newly-merged group for genuine unitary equivalence across 213{,}000+
+sampled node pairs (zero false collisions). Despite this real, substantial
+reduction in node fragmentation, a controlled comparison at matched
+seeds and budget shows no measurable change in circuit-level results
+(159.9 $\to$ 162.1 length-minimizing, 170.7 $\to$ 170.8 cost-aware,
+both within noise): the recovered coverage turns out to be almost
+entirely redundant with what the fragmented scheme already found in
+practice. The fix is kept in the codebase regardless, since it is a
+genuine, verified, zero-downside correctness improvement (smaller graphs,
+faster builds at fixed memory), but it is a seventh ruled-out cause, not
+an eighth data point for the depth hypothesis.
+
+\textbf{Reach extension.} A bidirectional (meet-in-the-middle) database
+lookup already existed in this codebase's own tooling: undo one trailing
+gate from a block's target unitary by left-multiplying with a pool gate's
+inverse, and check whether the residual is within the compute graph's
+direct reach, extending effective coverage by one gate at the cost of one
+extra lookup per pool token. At a short, smoke-test budget this looks like
+a clear regression (NISQ mean $+12.0$ gates); the reason is that each
+extended lookup costs $|\mathcal{P}|$ ($17$--$27$ for this pool) times as
+many queries as a direct one, so the reducer completes zero full sweep
+passes before the budget expires. At a realistic 45-second budget it does
+find genuine additional matches -- 12{,}033 extended hits a direct lookup
+missed, out of 54{,}418 total, on six circuits -- but the per-lookup
+overhead still dominates: 3--4 completed passes against the plain sweep's
+30+, and the net effect remains slightly worse (163.5 $\to$ 168.5 gates,
+$+3.1\%$). Extra reach exists and is real; it is not worth its own cost
+at this pool's branching factor, an eighth ruled-out cause.
+
+\subsection{A ninth attempt: porting the reference implementation's own loop}
+\label{sec:burst}
+
+The MATLAB reference implementation released alongside
+\cite{Rosenhahn2025Optimization} (\texttt{matlab\_demo/QCOptimDemo} in
+this repository) is not merely a gate-set specification: its
+\texttt{optimCodeGMode1DComp.m} implements a complete reduction loop, and
+it differs from this codebase's exhaustive sweep in several concrete,
+previously-untested ways. Windows are rejection-sampled to at most three
+wires -- its own compute graph is 3-wire only, so it never attempts a
+full four-qubit-register window at all, unlike the four-wire graph this
+codebase built specifically to cover that case
+(Section~\ref{sec:deep5}). Window length is a single random draw in
+$[1,\min(\text{remaining},7)]$, not an exhaustive try-every-length,
+longest-first sweep. Structural collapse is far weaker: its
+\texttt{simplereduce.m} only cancels an adjacent pair whose combined
+unitary is exactly the identity, nothing like this codebase's full
+single-wire collapse against the complete one-wire graph or its algebraic
+pre-pass. No MATLAB or Octave installation was available to run the
+reference code directly (nor would Octave supply the MATLAB Quantum
+Computing Support Package functions the demo depends on), so this loop
+was ported to Python faithfully, gate for gate, against this codebase's
+own NISQ database, and named \texttt{reduce\_matlab\_burst}.
+
+Every individual mechanism above is weaker than this codebase's own
+exhaustive sweep, but each attempt is far cheaper, so within a fixed
+wall-clock budget it completes one to two orders of magnitude more raw
+attempts (measured: 100{,}000+ attempts at a 30--60 second budget, against
+15--90 completed sweep passes for the same budget). Screening the split
+between the two loops (running the ported loop for a fraction of the
+budget before handing off to the exhaustive pipeline for whatever
+remains, at fractions $0, 0.15, 0.3, 0.5, 0.75, 1$) found the two extremes
+dominate every mixture in between; spending the entire budget on the
+ported loop wins outright, with the existing pipeline's own unconditional
+final structural-plus-sweep cleanup pass still applied afterward. This
+configuration, exposed as \texttt{reduce\_circuit}'s \texttt{burst\_frac}
+parameter and defaulted to $1.0$ for the NISQ pool, is adopted as this
+codebase's new default and is what Table~\ref{tab:nisq}'s last two rows
+report.
+
+\begin{table}[H]
+\centering
+\caption{NISQ total gate count, exhaustive sweep (the previous default)
+versus the matlab\_demo-faithful burst reducer (the new default),
+identical 100 seeds, identical hybrid setting, full official protocol.}
+\label{tab:burst}
+\begin{tabular}{lccc}
+\toprule
+method & exhaustive sweep & burst (new default) & paired $\Delta$ \\
+\midrule
+length-minimizing & 160.9 (12.8) & 155.3 (12.5) & $-5.6$ ($-3.4\%$) \\
+cost-aware         & 160.5 (13.4) & 155.1 (12.4) & $-5.4$ ($-3.3\%$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\linewidth]{../figures/figure_matlab_burst_nisq_cost.png}
+    \caption{NISQ cost-aware total gate count, exhaustive sweep versus the
+    matlab\_demo-faithful burst reducer, $n=100$, identical seeds. Left:
+    per-circuit distribution against the published baseline. Right: paired
+    per-circuit change, colored by direction.}
+    \label{fig:burst}
+\end{figure}
+
+The improvement is real and consistent, not a few favorable circuits: a
+paired $t$-test against the exhaustive-sweep result on the same seeds
+gives $t=-13.7$ ($p=1.5\times10^{-24}$, Cohen's $d=-1.37$) for
+length-minimizing and $t=-12.3$ ($p=9.2\times10^{-22}$, $d=-1.23$) for
+cost-aware; the burst reducer wins outright on 91/100 and 88/100 seeds
+respectively, and every one of the 200 resulting circuits (100 seeds
+$\times$ 2 objectives) passes unitary verification. Two things should be
+said about what this result is not. It does not close the gap to the
+published baseline: 155.1 remains a $45\%$ shortfall against 107, not a
+$50\%$ one. And it was found empirically, not derived from a specific
+diagnosed mechanism -- the most plausible account is that raw iteration
+throughput of cheap, individually weaker stochastic moves outweighs fewer,
+more careful ones under this search's particular time budget, a
+possibility the six-hypothesis diagnostic study above did not consider
+because ``how many attempts fit in the budget'' is a different axis from
+any of input composition, database depth, time budget, loop \emph{choice}
+among the paper's own three variants, window discovery, or node-key
+precision. It is reported here as a real, load-bearing, but modest
+addition on top of an otherwise still-open question, not as a resolution
+of it.
+
 \subsection{Why the ion-trap pool behaves differently}
 
 The two pools are not just harder or easier versions of the same problem.
@@ -771,8 +936,14 @@ build of the current one.
 
 \section{Limitations}
 
-BQSKit was not installed in the evaluation environment used for the runs
-reported here, so BQSKit baselines are omitted rather than estimated. The
+BQSKit baselines are omitted from the main hundred-circuit tables
+(Tables~\ref{tab:ion}, \ref{tab:nisq}) for tractability, not availability;
+a separate, smaller ($n=30$) head-to-head against BQSKit levels 2--4 is
+reported in the repository's README rather than in this paper, since it
+was not run on identical machinery throughout the project and BQSKit
+level 4 in particular failed unitary verification for every ion-trap
+circuit tested, an unresolved issue on our side rather than a claim about
+BQSKit itself. The
 hardware validation reported for the published method, comparing reduced
 and unreduced circuits on real IBM devices, is outside the scope of this
 study; every result in this paper is a unitary-verified simulation. The published
@@ -791,15 +962,22 @@ construction, are enough on their own to exceed a strong published
 baseline on an all-Clifford gate set, on both total length and the
 two-qubit count that governs hardware fidelity. On a
 NISQ gate set outside the exact engine's reach, the same infrastructure
-falls short of that baseline; systematically eliminating six candidate
-explanations, including compute-graph depth tested independently on the
-three-wire and four-wire graphs, localizes the cause to a database
+falls short of that baseline; systematically eliminating eight candidate
+explanations in turn, including compute-graph depth tested independently
+on the three-wire and four-wire graphs, a node-keying fragility fix, and
+a bidirectional reach extension, localizes the cause to a database
 factorization limit that persists regardless of how deep either graph is
 built, and identifying the specific factorization responsible is left
-open. The per-process caching defect the deeper-graph experiment
-surfaced is worth taking away independently of this method: it applies
-to any local-search circuit optimizer benchmarked against a compute graph
-too large to fit in memory.
+open. A ninth attempt, faithfully porting the published method's own
+MATLAB reference implementation rather than a further ablation of this
+codebase's own machinery, does help: adopted as the new default, it
+narrows the gap by $3$--$3.5\%$ ($p<10^{-21}$, $n=100$,
+Section~\ref{sec:burst}) without closing it, and is reported as exactly
+that -- a real, modest, empirically-found improvement layered on an
+otherwise still-open question, not a resolution of it. The per-process
+caching defect the deeper-graph experiment surfaced is worth taking away
+independently of this method: it applies to any local-search circuit
+optimizer benchmarked against a compute graph too large to fit in memory.
 
 \section*{Data availability}
 Source code, benchmark data, and figures supporting the findings of this

@@ -240,7 +240,7 @@ def _count_twq(gates) -> int:
 
 def _worker(args):
     (gateset, method, num_qubits, length, budget_s, seed, weights, rz_pass, depths,
-     max_block_len, restarts, backend, rf_gate, hybrid, fast_sweep) = args
+     max_block_len, restarts, backend, rf_gate, hybrid, fast_sweep, burst_frac) = args
     gates, _ = random_circuit(num_qubits, length, gateset, seed=seed, weights=weights)
     if method.startswith("qiskit_"):
         res = _qiskit_transpile(gates, num_qubits, gateset, int(method[-1]))
@@ -312,6 +312,7 @@ def _worker(args):
                 cost_aware=cost_aware,
                 max_block_len=max_block_len,
                 use_fast_sweep=fast_sweep,
+                burst_frac=burst_frac,
             )
             key = (_count_twq(r), len(r)) if cost_aware else (len(r),)
             if best_r is None or key < best_key:
@@ -415,7 +416,7 @@ def _run_bqskit_tasks(tasks: list) -> list[dict]:
     with Compiler() as compiler:
         for i, t in enumerate(tasks):
             (gateset, method, num_qubits, length, budget_s, seed, weights, rz_pass, depths,
-             max_block_len, restarts, backend, rf_gate, hybrid, fast_sweep) = t
+             max_block_len, restarts, backend, rf_gate, hybrid, fast_sweep, burst_frac) = t
             gates, _ = random_circuit(num_qubits, length, gateset, seed=seed, weights=weights)
             res = _bqskit_compile(gates, num_qubits, gateset, int(method[-1]), compiler=compiler)
             if res is None:
@@ -592,6 +593,17 @@ def main() -> None:
                              "(reduce_circuit(use_fast_sweep=True)) instead of rebuilding each tried "
                              "window length's unitary from scratch -- same per-window result, higher "
                              "search throughput per second (scripts/check_fast_sweep*.py)")
+    parser.add_argument("--burst-frac", type=float, default=None,
+                        help="numeric_len/numeric_cost only: spend this fraction of the budget on "
+                             "reduce_matlab_burst (matlab_demo/QCOptimDemo/optimCodeGMode1DComp.m's "
+                             "faithfully-ported reduction loop: rejection-sampled <=3-wire random "
+                             "windows, weak identity-only collapse) before the exhaustive pipeline "
+                             "runs on what's left; 1.0 spends the whole budget there. Defaults to 1.0 "
+                             "for nisq (measured +3% mean improvement over burst_frac=0, n=100, "
+                             "p<1e-16 both objectives -- see report/draft_paper.tex's diagnostic "
+                             "study) and 0.0 for ion_trap (not validated there; the exact engine "
+                             "already wins decisively on that pool). Pass explicitly to override "
+                             "either default.")
     parser.add_argument("--outdir", type=str, default="results/comparison")
     parser.add_argument("--quick", action="store_true", help="8 circuits, 10 s budget (smoke test)")
     args = parser.parse_args()
@@ -608,6 +620,9 @@ def main() -> None:
 
     weights = ION_WEIGHTS if args.gateset == "ion_trap" else NISQ_WEIGHTS
     rz_pass = args.rz_pass or args.gateset == "nisq"
+    burst_frac = args.burst_frac
+    if burst_frac is None:
+        burst_frac = 1.0 if args.gateset == "nisq" else 0.0
 
     backend = args.backend or ("sqlite" if args.deep else "ram")
     if args.hybrid and args.gateset != "nisq":
@@ -676,7 +691,7 @@ def main() -> None:
                 continue
             tasks.append((args.gateset, m, args.num_qubits, args.length, args.budget, s,
                           weights, rz_pass, depths, max_block_len, max(1, args.restarts),
-                          backend, args.rf_gate, args.hybrid, args.fast_sweep))
+                          backend, args.rf_gate, args.hybrid, args.fast_sweep, burst_frac))
 
     print(
         f"[{args.gateset}] {args.num_circuits} circuits x {args.length} gates (q{args.num_qubits}), "
@@ -727,6 +742,7 @@ def main() -> None:
         "rf_gate": args.rf_gate,
         "hybrid": args.hybrid,
         "fast_sweep": args.fast_sweep,
+        "burst_frac": burst_frac,
         "date": time.strftime("%Y-%m-%d %H:%M:%S"),
         "wall_sec": round(wall, 1),
         "with_numeric": args.numeric,

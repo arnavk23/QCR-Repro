@@ -8,26 +8,32 @@ quantum circuit reduction, evaluated against Rosenhahn, Osborne & Hirche,
 On the ion-trap (all-Clifford) gate set, a bit-exact signed-symplectic
 engine plus a two-qubit-aware search objective beats the published result,
 and also beats BQSKit L2/L3 by more than 2x on both total and two-qubit
-gate count (`results/comparison_bqskit_ion/`, n=30). On NISQ, the same
-method wins on total gate count against BQSKit too, though two-qubit count
-there is a genuine near-tie rather than a clean win
-(`results/comparison_bqskit_nisq30/`, n=30). On the NISQ gate set a gap
-remains against the published baseline itself; six candidate explanations
-for it are tested and ruled out in a systematic diagnostic study
-(`report/draft_paper.tex`).
+gate count (`results/comparison_bqskit_ion/`, n=30). On the NISQ gate set
+a gap remains against the published baseline itself; six candidate
+explanations for it are tested and ruled out in a systematic diagnostic
+study, and a seventh (a node-keying fragility fix, kept for its own sake)
+and an eighth (a compute-graph reach extension, net negative once its
+overhead is accounted for) are added and ruled out the same way
+(`report/draft_paper.tex`). A ninth attempt, directly porting
+`matlab_demo/QCOptimDemo`'s own reduction loop, *does* help: run as the
+entire search budget ahead of this codebase's exhaustive sweep (the
+default as of this pass), it improves NISQ's mean gate count by ~3%
+(p < 10⁻¹⁶, n = 100) over the exhaustive sweep alone — a real, modest win
+layered on top of the still-open gap, not a fix for it
+(`src/reducer.py`'s `reduce_matlab_burst` / `burst_frac`).
 
 The repository also includes extensions not in the original paper: a
 dependency-graph based block-reordering pass (`src/dag.py`), a
 disk-backed compute-graph backend for databases too large to fit in RAM,
 an incremental per-window search construction that removes redundant
 from-scratch rebuilds in the sweep's hot loop (`src/reducer.py`,
-`src/exact_reducer.py`), and a richer mixed Clifford/non-Clifford
-ion-trap pool (±π/2, ±π/4, ±π/8) that stress-tests the whole approach on a
-larger gate set. That last one is an honest negative result worth reading
-before assuming this scales freely: the larger pool forces much shallower
-compute graphs under the same build budget, and at that depth the method
-currently loses even to plain qiskit (Section "A mixed
-Clifford/non-Clifford ion-trap pool: a boundary case" in
+`src/exact_reducer.py`), the matlab_demo-faithful burst reducer above, and
+a richer mixed Clifford/non-Clifford ion-trap pool (±π/2, ±π/4, ±π/8) that
+stress-tests the whole approach on a larger gate set. That last one is an
+honest negative result worth reading before assuming this scales freely:
+the larger pool forces much shallower compute graphs under the same build
+budget, and at that depth the method currently loses even to plain qiskit
+(Section "A mixed Clifford/non-Clifford ion-trap pool: a boundary case" in
 `report/draft_paper.tex`) — a real boundary condition of the technique,
 not a bug.
 
@@ -39,11 +45,16 @@ across methods (`results/comparison/`):
 | Gate set | Published "Ours" | This work | Δ |
 |---|---:|---:|---:|
 | Ion trap (RX/RY/RZ/RXX) | 111 gates (43 RXX) | **66.7** gates (25.9 RXX) | −40% |
-| NISQ (RX/RZ/CZ) | 107 gates (43 CZ) | 160.5 gates (49.6 CZ) | gap remains |
+| NISQ (RX/RZ/CZ) | 107 gates (43 CZ) | 155.1 gates (48.9 CZ) | gap remains |
 
-Both differences are statistically significant (p < 10⁻⁴⁵ and p < 10⁻⁶⁰
-respectively, one-sample t-test, n = 100). Full method, protocol, and the
-NISQ diagnostic study are in `report/draft_paper.tex`.
+Both differences vs. the published baseline are statistically significant
+(p < 10⁻⁴⁵ and p < 10⁻⁶⁰ respectively, one-sample t-test, n = 100). The NISQ
+row already reflects the matlab_demo-faithful burst reducer (`burst_frac=1.0`,
+now the default for this gate set); without it the same protocol (identical
+seeds, identical hybrid setting) gives 160.5 gates — the burst mode's own
+paired improvement over the exhaustive sweep is independently significant
+too (−3.3%, p = 9×10⁻²², paired t-test, n = 100). Full method, protocol, and
+the NISQ diagnostic study are in `report/draft_paper.tex`.
 
 **Against BQSKit** (n=30 per gate set, `results/comparison_bqskit_ion/`,
 `results/comparison_bqskit_nisq30/`):
@@ -51,13 +62,16 @@ NISQ diagnostic study are in `report/draft_paper.tex`.
 | Gate set | This work (total, twq) | BQSKit L2 | BQSKit L3 |
 |---|---:|---:|---:|
 | Ion trap | 67.8, 25.4 | 155.1, 36.6 | 133.0, 30.3 |
-| NISQ | 160.5, 51.2 | 228.9, 65.2 | 213.2, **50.8** |
+| NISQ (burst default) | 156.1, 50.8 | 227.5, 65.2 | 211.4, **50.3** |
 
 Ion-trap is a clean win on both metrics. NISQ wins on total gate count but
 two-qubit count is a genuine near-tie (BQSKit L3 edges us slightly there,
-consistently across two independent runs) — a real, currently-open
-limitation, not noise; see the NISQ cost-aware diagnostic in
-`report/draft_paper.tex` for why. BQSKit L4 is omitted: every circuit at
+consistently across two independent runs, now with the burst default
+included too) — a real, currently-open limitation, not noise; see the NISQ
+cost-aware diagnostic in `report/draft_paper.tex` for why. In this run
+BQSKit L3 itself also failed unitary verification on 1/30 circuits
+(pass rate 0.967) — an issue on BQSKit's side of the comparison, not ours,
+noted here rather than silently dropped. BQSKit L4 is omitted: every circuit at
 that level failed unitary verification in our setup (likely an internal
 qubit-relabeling issue at that optimization level), so its numbers aren't
 trustworthy as reported.

@@ -18,6 +18,44 @@ from .gates import embedded_gate_matrix
 from .token_pool import TokenPool
 
 
+def _phase_reference(flat: np.ndarray) -> complex:
+    """A stable, whole-matrix phase reference for global-phase normalization.
+
+    The original scheme picked the single largest-magnitude entry
+    (``argmax(round(abs(flat), 8))``) as the phase pivot. That is fragile:
+    two different token chains reaching the same unitary up to global phase
+    are computed via independent floating-point multiplication paths, and
+    for pools rich in diagonal gates (RZ, CZ -- exactly the NISQ pool) many
+    entries legitimately share equal or near-equal magnitude, so the two
+    paths can round to *different* entries as "the largest" one, each
+    carrying a different phase. Normalizing against different entries of an
+    otherwise-identical matrix produces different keys, fragmenting what
+    should be a single compute-graph node into several and silently
+    starving the database's factorization coverage -- exactly the
+    unresolved "database factorization limit" this project's diagnostic
+    study localized but did not close.
+
+    Summing every entry uses the whole matrix instead of one coordinate, so
+    it is far less sensitive to any single entry's tie-breaking. Verified
+    empirically (200,000+ sampled node pairs on the NISQ pool, 2- and
+    3-wire, both previously-colliding and newly-reunified groups) to merge
+    21-32% more nodes with zero false collisions -- i.e. purely recovered
+    coverage, not spurious equivalences. Falls back to the old single-entry
+    pivot only in the rare degenerate case where entries cancel to a
+    near-zero sum.
+    """
+    total = flat.sum()
+    if abs(total) < 1e-9:
+        idx = int(np.argmax(np.round(np.abs(flat), 8)))
+        return flat[idx]
+    return total
+
+
+def _normalize_phase(flat: np.ndarray) -> np.ndarray:
+    phase = np.angle(_phase_reference(flat))
+    return flat * np.exp(-1j * phase)
+
+
 def _token_type_counts(gates: list[GateInstance]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for gate in gates:
@@ -229,9 +267,7 @@ class ComputeGraph:
             for token, gate_u in cached.items():
                 next_u = gate_u @ current_u
                 flat = next_u.reshape(-1)
-                idx = int(np.argmax(np.round(np.abs(flat), 8)))
-                phase = np.angle(flat[idx])
-                nflat = flat * np.exp(-1j * phase)
+                nflat = _normalize_phase(flat)
                 key = self._node_key(nflat, self.digest_decimals)
                 existing = self.buckets.get(key)
                 if existing is not None:
@@ -267,9 +303,7 @@ class ComputeGraph:
 
 Phase normalization runs inline on the flattened matrix for speed."""
         flat = unitary.reshape(-1)
-        idx = int(np.argmax(np.round(np.abs(flat), 8)))
-        phase = np.angle(flat[idx])
-        nflat = flat * np.exp(-1j * phase)
+        nflat = _normalize_phase(flat)
         key = self._node_key(nflat, self.digest_decimals)
         return self.buckets.get(key)
 
@@ -287,9 +321,7 @@ Maps <=3-wire blocks into a low-dimensional space, looks up, maps back; None if 
 
     def _lookup_key(self, unitary: np.ndarray) -> bytes | None:
         flat = unitary.reshape(-1)
-        idx = int(np.argmax(np.round(np.abs(flat), 8)))
-        phase = np.angle(flat[idx])
-        key = self._node_key(flat * np.exp(-1j * phase), self.digest_decimals)
+        key = self._node_key(_normalize_phase(flat), self.digest_decimals)
         return key if key in self.buckets else None
 
     def try_reduce_cost(self, block: list[GateInstance]) -> list[GateInstance] | None:
@@ -496,9 +528,7 @@ class DiskComputeGraph:
                 for token, gate_u in cached.items():
                     next_u = gate_u @ u
                     flat = next_u.reshape(-1)
-                    idx = int(np.argmax(np.round(np.abs(flat), 8)))
-                    phase = np.angle(flat[idx])
-                    nflat = flat * np.exp(-1j * phase)
+                    nflat = _normalize_phase(flat)
                     key = self._node_key(nflat, self.digest_decimals)
                     new_chain = chain + (token,)
                     existing = shortest.get(key)
@@ -590,9 +620,7 @@ class DiskComputeGraph:
 
     def lookup(self, unitary: np.ndarray) -> tuple[int, ...] | None:
         flat = unitary.reshape(-1)
-        idx = int(np.argmax(np.round(np.abs(flat), 8)))
-        phase = np.angle(flat[idx])
-        nflat = flat * np.exp(-1j * phase)
+        nflat = _normalize_phase(flat)
         key = self._node_key(nflat, self.digest_decimals)
         return self._chain_for(key)
 
@@ -626,9 +654,7 @@ class DiskComputeGraph:
 
     def _lookup_key(self, unitary: np.ndarray) -> bytes | None:
         flat = unitary.reshape(-1)
-        idx = int(np.argmax(np.round(np.abs(flat), 8)))
-        phase = np.angle(flat[idx])
-        key = self._node_key(flat * np.exp(-1j * phase), self.digest_decimals)
+        key = self._node_key(_normalize_phase(flat), self.digest_decimals)
         return key if key in self._keys else None
 
     def try_reduce_cost(self, block: list[GateInstance]) -> list[GateInstance] | None:
@@ -970,11 +996,17 @@ def _repo_root() -> Path:
 _CACHE_DIR = _repo_root() / ".cache"
 
 
+# Bumped whenever the node-keying scheme changes, so a stale cache built
+# under an old scheme (e.g. the single-entry phase pivot _normalize_phase
+# replaced) can never be silently loaded and queried with new-scheme keys.
+_KEY_SCHEME = "k2sum"
+
+
 def _db_filename(db: ReductionDatabase) -> str:
     depths = "_".join(f"w{w}d{d}" for w, d in sorted(db.depths.items()))
     angles = "".join(str(a) for a in db.angles).replace(".", "p").replace("-", "m")
     tq = "".join(str(a) for a in db.two_qubit_angles).replace(".", "p").replace("-", "m")
-    return f"db_{db.gate_set_name}_{depths}_ang{angles}_tq{tq}.pkl"
+    return f"db_{db.gate_set_name}_{depths}_ang{angles}_tq{tq}_{_KEY_SCHEME}.pkl"
 
 
 def load_or_build_database(
